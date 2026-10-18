@@ -2,7 +2,7 @@
 
 The process document for coding agents working in this repo (`emilis3/vroom-city`, Vroom City). It is the only process doc; the README stays slim. `CLAUDE.md` points here.
 
-> Dev process only. What the app does, its stack and design live in the GitHub issues (MVP: #2), never here.
+> Dev process only. What the app does, its stack and design live in the GitHub issues (the game as it already works is described in the README), never here.
 
 ## 1. TL;DR
 - GitHub Issues are the source of truth. The issue body is the spec.
