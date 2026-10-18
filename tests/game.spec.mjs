@@ -32,8 +32,11 @@ test('loads, draws frames and needs nothing from the network', async ({ page }) 
 
 test('town, collisions and stars are exactly where they were before', async ({ page }) => {
   await open(page);
-  const now = await page.evaluate(() => ({ stars, solids, mountains: mountains.map(m => ({ x: m.x, z: m.z, r: m.r, h: m.h })), lake }));
-  expect(now.solids).toEqual(LAYOUT.solids);
+  const now = await page.evaluate(() => ({ stars, solids: solids.slice(0, station.firstSolid), mountains: mountains.map(m => ({ x: m.x, z: m.z, r: m.r, h: m.h })), lake }));
+  // only the few countryside trees where the launch station now stands are gone
+  const kept = await page.evaluate(all => all.filter(s => !inStationArea((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2, 3)), LAYOUT.solids);
+  expect(LAYOUT.solids.length - kept.length).toBeLessThan(15);
+  expect(now.solids).toEqual(kept);
   expect(now.mountains).toEqual(LAYOUT.mountains);
   expect(now.lake).toEqual(LAYOUT.lake);
   expect(now.stars).toEqual(LAYOUT.stars);
@@ -279,4 +282,166 @@ test('wave ramps make a fast boat hop and a slow one bump; ducks scatter and com
   expect(r.fled).toBeGreaterThan(3);
   expect(r.inLake).toBe(true);
   expect(r.home).toBeLessThan(1.5);
+});
+
+// ---------- Space (#5) ----------
+
+// runs the game for `secs` of game time, 60 steps a second
+const STEP = `(secs, stop) => { for (let i = 0; i < secs * 60; i++) { update(1 / 60); if (stop && stop()) return i / 60; } return secs; }`;
+
+test('launch station: at the edge of town away from the lake, clear of water, mountains and trees', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const clear = [];
+    for (let lx = -48; lx <= 20; lx += 2) for (let lz = -PADH - station.road; lz <= 20; lz += 2) {
+      const [x, z] = station.world(lx, lz);
+      if (wet(x, z, 5) || mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4)) clear.push([lx, lz]);
+    }
+    const [roadEndX, roadEndZ] = station.world(0, -PADH - station.road + 1);
+    const road = [];
+    for (let t = 0; t <= 1; t += .05) { // the car can drive from the town road onto the pad
+      const [x, z] = station.world(0, -PADH - station.road + 2 + t * (station.road + PADH - 8));
+      if (hits(x, z)) road.push(t);
+    }
+    return {
+      padFromTown: townDist(station.x, station.z), roadEnd: townDist(roadEndX, roadEndZ), clear, road,
+      trees: solids.slice(0, station.firstSolid).filter(s => inStationArea((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2)).length,
+      awayFromLake: Math.hypot(station.x - lake.x, station.z - lake.z) > Math.hypot(W / 2 - lake.x, W / 2 - lake.z),
+      onPad: inStation(station.x + 10, station.z - 10), onH: inStation(station.hx, station.hz), offPad: inStation(station.x, station.z - PADH - 3),
+    };
+  });
+  expect(r.padFromTown).toBeGreaterThan(30);
+  expect(r.padFromTown).toBeLessThan(60);
+  expect(r.roadEnd).toBeLessThan(8);
+  expect(r).toMatchObject({ clear: [], road: [], trees: 0, awayFromLake: true, onPad: true, onH: true, offPad: false });
+});
+
+test('at the station H boards the rocket; the helicopter lands on the H pad as the car', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const badge = () => document.getElementById('mode').textContent, help = () => document.getElementById('help').textContent, out = {};
+    setMode('car'); Object.assign(car, { x: 3 * P, z: P / 2 }); refreshHud(); out.town = badge();
+    const [x, z] = station.world(0, -PADH + 5); Object.assign(car, { x, z }); refreshHud();
+    out.pad = [badge(), help()];
+    switchVehicle(); out.board = [mode, scene, rocket.count > 3, badge(), help()];
+    switchVehicle(); out.cancel = [mode, inStation(car.x, car.z)]; // still on the pad: H gives the car back
+    setMode('heli'); Object.assign(heli, { x: station.hx, z: station.hz, y: 20 }); switchVehicle();
+    out.heli = [mode, inStation(car.x, car.z), badge()];
+    setMode('heli'); Object.assign(heli, { x: 3 * P, z: P / 2 }); switchVehicle(); out.elsewhere = badge();
+    return out;
+  });
+  expect(r).toEqual({
+    town: 'H = 🚁',
+    pad: ['H = 🚀', 'Arrows or WASD = drive · Space = beep beep! · H = rocket · M = sound'],
+    board: ['rocket', 'earth', true, 'H = 🚗', 'Hold W, Space or ↑ = blast off · S or ↓ = go down · H = car · M = sound'],
+    cancel: ['car', true], heli: ['car', true, 'H = 🚀'], elsewhere: 'H = 🚁',
+  });
+});
+
+test('countdown, then holding up reaches space in about 15 s; letting go hovers', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('car'); Object.assign(car, { x: station.x, z: station.z - PADH + 5 }); switchVehicle();
+    keys.add('KeyW');
+    step(3); out.countdown = [rocket.y, rocket.count > 0]; // holding up waits for the countdown
+    step(.5); out.lift = rocket.count;
+    out.toSpace = step(30, () => scene === 'space');
+    out.space = [scene, Math.round(rocket.y), document.getElementById('mode').textContent];
+    // back on the pad, climb halfway and let go: it hovers
+    reenter(); Object.assign(rocket, { y: 0, vy: 0 }); step(7, () => rocket.y > 300);
+    keys.clear(); step(3); const y = rocket.y; step(3);
+    out.hover = [Math.abs(rocket.vy) < .5, rocket.y >= y - .5, rocket.y > 250];
+    out.inFlightH = (switchVehicle(), mode);
+    return out;
+  }, STEP);
+  expect(r.countdown).toEqual([0, true]);
+  expect(r.lift).toBe(0);
+  expect(r.toSpace).toBeGreaterThan(12);
+  expect(r.toSpace).toBeLessThan(18);
+  expect(r.space).toEqual(['space', 340, '🚀']);
+  expect(r.hover).toEqual([true, true, true]);
+  expect(r.inFlightH).toBe('rocket');
+});
+
+test('space: stars only the rocket can catch, soft bumps, the edge, and the Moon', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}, dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+    setMode('rocket'); enterSpace();
+    out.stars = [spaceStars.length, spaceStars.every(s => Math.hypot(s.x, s.y, s.z) < SB && [...planets, MOON].every(b => dist(s, b) > b.r + 30))];
+    const before = score; Object.assign(spaceStars[0], { x: rocket.x, y: rocket.y, z: rocket.z }); step(1 / 60);
+    out.catch = [score - before, dist(spaceStars[0], rocket) > 150];
+    const pl = planets[0]; Object.assign(rocket, { x: pl.x + pl.r, y: pl.y, z: pl.z }); step(1 / 60);
+    out.planet = dist(rocket, pl) >= pl.r + 9.9;
+    Object.assign(rocket, { x: SB + 50, y: 0, z: 0, a: Math.PI / 2 }); keys.add('ArrowUp'); step(2); keys.clear();
+    out.edge = Math.hypot(rocket.x, rocket.y, rocket.z) <= SB;
+    Object.assign(rocket, { x: MOON.x, y: MOON.y + MOON.r + 15, z: MOON.z }); step(1 / 60);
+    out.moon = [scene, mode];
+    out.landed = step(30, () => mode === 'buggy') < 30;
+    out.buggy = [scene, document.getElementById('mode').textContent, tracks.length];
+    return out;
+  }, STEP);
+  expect(r).toEqual({ stars: [6, true], catch: [1, true], planet: true, edge: true, moon: ['moon', 'rocket'], landed: true,
+    buggy: ['moon', 'H = 🚀', 0] });
+});
+
+test('the moon buggy bounces over crater rims, leaves tracks, and H flies home to the pad', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnMoon(); step(30, () => mode === 'buggy');
+    const c = craters.find(k => Math.hypot(k.x, k.z) > 30);
+    Object.assign(buggy, { x: c.x - (c.r + 10) * Math.sign(c.x || 1), z: c.z, a: Math.sign(c.x || 1) * Math.PI / 2, v: 14, y: 0, vy: 0, g: 0 });
+    buggy.g = moonGround(buggy.x, buggy.z); buggy.y = buggy.g;
+    keys.add('ArrowUp');
+    let top = 0; for (let i = 0; i < 120; i++) { step(1 / 60); top = Math.max(top, buggy.y - moonGround(buggy.x, buggy.z)); }
+    out.bounce = top;
+    keys.add('ArrowLeft'); step(20); keys.clear(); // round and round
+    out.tracks = [tracks.length > 20, tracks.length <= 300, Math.hypot(buggy.x, buggy.z) < MOONR - 3];
+    switchVehicle(); out.back = [mode, scene];
+    keys.add('KeyW'); out.leave = step(20, () => scene === 'space') < 20; keys.clear();
+    out.space = [scene, tracks.length];
+    Object.assign(rocket, { x: 0, y: ER + GAP - 50, z: 0 }); step(1 / 60);
+    out.reentry = [scene, rocket.x === station.x && rocket.z === station.z, rocket.y > 700];
+    keys.add('KeyS'); out.landTime = step(40, () => rocket.y === 0); keys.clear();
+    out.pad = [landed(), document.getElementById('mode').textContent];
+    switchVehicle(); out.car = [mode, inStation(car.x, car.z)];
+    return out;
+  }, STEP);
+  expect(r.bounce).toBeGreaterThan(1);
+  expect(r.tracks).toEqual([true, true, true]);
+  expect(r.back).toEqual(['rocket', 'moon']);
+  expect(r.leave).toBe(true);
+  expect(r.space).toEqual(['space', 0]);
+  expect(r.reentry).toEqual(['earth', true, true]);
+  expect(r.landTime).toBeLessThan(40);
+  expect(r.pad).toEqual([true, 'H = 🚗']);
+  expect(r.car).toEqual(['car', true]);
+});
+
+test('with the keyboard: blast off, space, the Moon and the buggy all draw without errors', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX'); // start
+  await page.evaluate(() => { const [x, z] = station.world(0, -PADH + 5); Object.assign(car, { x, z }); });
+  await page.keyboard.press('KeyH');
+  await page.waitForFunction(() => mode === 'rocket' && rocket.count === 0, null, { timeout: 40_000 });
+  await page.keyboard.down('Space');
+  await page.waitForFunction(() => rocket.y > 5 && rocket.thrust > .5, null, { timeout: 40_000 });
+  await page.evaluate(() => { rocket.y = 780; });
+  await page.waitForFunction(() => scene === 'space', null, { timeout: 40_000 });
+  await page.keyboard.up('Space');
+  const shot = await page.locator('canvas').screenshot();
+  expect(shot.length).toBeGreaterThan(5_000);
+  await page.evaluate(() => landOnMoon());
+  await page.waitForFunction(() => mode === 'buggy', null, { timeout: 60_000 });
+  await page.keyboard.down('ArrowUp');
+  await page.waitForFunction(() => tracks.length > 2, null, { timeout: 40_000 });
+  await page.keyboard.up('ArrowUp');
+  await page.keyboard.press('KeyH');
+  await page.waitForFunction(() => mode === 'rocket', null, { timeout: 10_000 });
+  expect(await glError(page)).toBe(0);
+  expect(problems).toEqual([]);
 });
