@@ -45,7 +45,7 @@ After landing, add `in staging` to the issue; the `post-prod-sync` Action remove
 | `platform` | Infra/hosting/database |
 
 ## 6. Environments
-- Hosting: Vercel (team emilisgin-1705), static site with no build step. `main` -> production (TBD, set once the Vercel project exists), `staging` -> staging (TBD, set once the Vercel project exists). If staging is behind login, don't claim to have checked it.
+- Hosting: Vercel (team emilisgin-1705), static site with no build step. Vercel project `vroom-city`. `main` -> production (https://vroom-city.vercel.app), `staging` -> staging (https://vroom-city-git-staging-emilisgin-1705.vercel.app). If staging is behind login, don't claim to have checked it.
 - Env vars: document names only, never values; scope staging and production separately.
 
 ## 7. Before reporting it on staging
