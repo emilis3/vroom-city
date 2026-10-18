@@ -1,0 +1,82 @@
+# After the owner merges the staging -> main PR: make staging's tip identical to
+# main, close the issues the PR names with Closes/Fixes/Resolves, and clear the
+# `in staging` label from shipped issues.
+#
+# Requires Settings -> Actions -> General -> Workflow permissions to allow
+# GITHUB_TOKEN read/write. If `staging` gets branch protection, GitHub Actions
+# must be allowed to push to it (or bypass the rule).
+name: Post-prod sync
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: post-prod-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'staging'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync staging to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main staging
+          main_sha=$(git rev-parse origin/main)
+          staging_sha=$(git rev-parse origin/staging)
+
+          # Moving staging onto main's SHA is intentional after a prod merge. It
+          # only happens when nothing is lost: staging is still the merged PR head
+          # (covers squash merges) or already contained in main.
+          if [ "$staging_sha" = "$PR_HEAD_SHA" ] || git merge-base --is-ancestor "$staging_sha" "$main_sha"; then
+            git push --force-with-lease=staging:"$staging_sha" origin "$main_sha":refs/heads/staging
+            echo "staging now at $main_sha"
+          else
+            # New work landed on staging after the merge; keep it and bring main in.
+            git checkout -B staging origin/staging
+            git merge --no-edit origin/main
+            git push origin staging
+            echo "staging had newer commits; merged main into it"
+          fi
+
+      - name: Close shipped issues and remove `in staging`
+        run: |
+          label="in staging"
+          closing=$(gh pr view "$PR_NUMBER" --json closingIssuesReferences --jq '.closingIssuesReferences[].number')
+          from_body=$(gh pr view "$PR_NUMBER" --json body --jq '.body' \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' | grep -oE '[0-9]+' || true)
+
+          # GitHub usually closes these itself on the merge into the default
+          # branch; this covers a non-default base or a body edited afterwards.
+          for n in $(printf '%s\n' $closing $from_body | sort -un); do
+            if [ "$(gh issue view "$n" --json state --jq '.state' 2>/dev/null)" = "OPEN" ]; then
+              gh issue close "$n" --reason completed
+              echo "Closed #$n"
+            fi
+          done
+
+          closed_labeled=$(gh issue list --label "$label" --state closed --limit 200 --json number --jq '.[].number')
+          for n in $(printf '%s\n' $closing $from_body $closed_labeled | sort -un); do
+            if gh issue view "$n" --json labels --jq '.labels[].name' 2>/dev/null | grep -qxF "$label"; then
+              gh issue edit "$n" --remove-label "$label"
+              echo "Removed '$label' from #$n"
+            fi
+          done
