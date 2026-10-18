@@ -1,0 +1,17 @@
+{
+  "name": "vroom-city",
+  "private": true,
+  "description": "Dev-only checks for Vroom City. The game itself (vroom-city.html) has no dependencies.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "lint": "node tests/lint.mjs",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.56.1",
+    "eslint": "10.1.0"
+  }
+}

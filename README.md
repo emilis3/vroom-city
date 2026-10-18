@@ -22,3 +22,7 @@ or open `vroom-city.html` in Chrome.
 | Shift | — | Go down |
 | H or Enter | Switch to helicopter | Land as the car |
 | M | Sound on/off | Sound on/off |
+
+## Checks (development only)
+
+The game needs nothing installed. For the checks, with Node 24: `npm ci`, `npx playwright install chromium`, then `npm run lint` and `npm test`.
