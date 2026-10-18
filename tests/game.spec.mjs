@@ -113,13 +113,16 @@ test('shapes have outward-facing unit normals', async ({ page }) => {
 });
 
 test('driving, flying and collecting a star still work, with the new effects', async ({ page }) => {
+  // the game moves a little each frame, and software rendering is slow on CI: a small window keeps frames coming
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
   const problems = await open(page);
   await page.keyboard.press('KeyX'); // start
   const before = await page.evaluate(() => ({ x: car.x, z: car.z, spin: car.spin }));
   await page.keyboard.down('ArrowUp');
-  await page.waitForFunction(() => car.v > 13, null, { timeout: 20_000 });
+  await page.waitForFunction(() => car.v > 13, null, { timeout: 40_000 });
   await page.keyboard.down('ArrowLeft');
-  await page.waitForFunction(() => fx.some(f => f.dust), null, { timeout: 10_000 }); // dust on a hard turn
+  await page.waitForFunction(() => fx.some(f => f.dust), null, { timeout: 40_000 }); // dust on a hard turn
   await page.keyboard.up('ArrowLeft');
   await page.keyboard.up('ArrowUp');
   const after = await page.evaluate(() => ({ x: car.x, z: car.z, spin: car.spin }));
@@ -128,13 +131,13 @@ test('driving, flying and collecting a star still work, with the new effects', a
 
   // put a road star on the car: score goes up and sparkles fly
   await page.evaluate(() => Object.assign(stars[0], { x: car.x, z: car.z, y: 2.2, sky: false }));
-  await page.waitForFunction(() => score === 1);
+  await page.waitForFunction(() => score === 1, null, { timeout: 30_000 });
   expect(await page.evaluate(() => fx.filter(f => !f.dust).length)).toBeGreaterThan(0);
 
   // helicopter: takes off and blows dust near the ground
   await page.keyboard.press('KeyH');
-  await page.waitForFunction(() => mode === 'heli' && fx.some(f => f.dust && f.y < heli.y));
-  await page.waitForFunction(() => heli.y > 5);
+  await page.waitForFunction(() => mode === 'heli' && fx.some(f => f.dust && f.y < heli.y), null, { timeout: 30_000 });
+  await page.waitForFunction(() => heli.y > 5, null, { timeout: 30_000 });
   expect(await glError(page)).toBe(0);
   expect(problems).toEqual([]);
 });
