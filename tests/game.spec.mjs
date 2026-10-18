@@ -427,7 +427,9 @@ test('with the keyboard: blast off, space, the Moon and the buggy all draw witho
   await page.keyboard.press('KeyX'); // start
   await page.evaluate(() => { const [x, z] = station.world(0, -PADH + 5); Object.assign(car, { x, z }); });
   await page.keyboard.press('KeyH');
-  await page.waitForFunction(() => mode === 'rocket' && rocket.count === 0, null, { timeout: 40_000 });
+  await page.waitForFunction(() => mode === 'rocket' && rocket.count > 0, null, { timeout: 40_000 });
+  // CI's software renderer can be very slow, and game time only moves 0.05 s a frame: skip the rest of the countdown
+  await page.evaluate(() => { rocket.count = .01; });
   await page.keyboard.down('Space');
   await page.waitForFunction(() => rocket.y > 5 && rocket.thrust > .5, null, { timeout: 40_000 });
   await page.evaluate(() => { rocket.y = 780; });
@@ -435,7 +437,7 @@ test('with the keyboard: blast off, space, the Moon and the buggy all draw witho
   await page.keyboard.up('Space');
   const shot = await page.locator('canvas').screenshot();
   expect(shot.length).toBeGreaterThan(5_000);
-  await page.evaluate(() => landOnMoon());
+  await page.evaluate(() => { landOnMoon(); rocket.y = 2; }); // just above the ground, to keep it quick
   await page.waitForFunction(() => mode === 'buggy', null, { timeout: 60_000 });
   await page.keyboard.down('ArrowUp');
   await page.waitForFunction(() => tracks.length > 2, null, { timeout: 40_000 });
