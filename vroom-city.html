@@ -1,0 +1,522 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Vroom City</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #9fd8ff; font-family: system-ui, sans-serif; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #mode { position: fixed; top: 16px; right: 24px; font-size: 44px; font-weight: 800; color: #fff; text-shadow: 0 4px 0 #0005; }
+  #hud { position: fixed; top: 16px; left: 24px; font-size: 64px; font-weight: 800; color: #fff; text-shadow: 0 4px 0 #0005; }
+  #help { position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; color: #fff; font-size: 18px; text-shadow: 0 2px 0 #0006; }
+  #yay { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 120px; font-weight: 900; color: #ffd84a;
+         text-shadow: 0 8px 0 #c76b00; opacity: 0; transform: scale(.5); transition: all .3s; pointer-events: none; }
+  #yay.show { opacity: 1; transform: scale(1); }
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+           background: #4fb3ffd0; color: #fff; cursor: pointer; text-align: center; }
+  #start h1 { font-size: 110px; margin: 0; text-shadow: 0 8px 0 #0003; }
+  #start p { font-size: 36px; margin: 12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">⭐ 0</div>
+<div id="mode">H = 🚁</div>
+<div id="yay">Great job!</div>
+<div id="help"></div>
+<div id="start"><h1>🚗 Vroom City!</h1><p>Catch the stars! Press H to fly the helicopter 🚁</p><p>Press any key to start</p></div>
+<script>
+"use strict";
+// ---------- WebGL setup ----------
+const cv = document.getElementById('c');
+const gl = cv.getContext('webgl', { antialias: true });
+function resize() {
+  const d = Math.min(devicePixelRatio || 1, 2);
+  cv.width = innerWidth * d; cv.height = innerHeight * d;
+  gl.viewport(0, 0, cv.width, cv.height);
+}
+addEventListener('resize', resize); resize();
+
+const VS = `attribute vec3 aPos, aNor, aCol;
+uniform mat4 uVP, uM; uniform vec2 uRot;
+varying vec3 vN, vC, vW;
+void main() {
+  vec4 w = uM * vec4(aPos, 1.0); vW = w.xyz;
+  vN = vec3(aNor.x*uRot.x + aNor.z*uRot.y, aNor.y, -aNor.x*uRot.y + aNor.z*uRot.x);
+  vC = aCol; gl_Position = uVP * w;
+}`;
+const FS = `precision mediump float;
+varying vec3 vN, vC, vW; uniform vec3 uTint, uCam, uSky; uniform vec2 uFog;
+void main() {
+  vec3 n = normalize(vN);
+  float d = max(dot(n, normalize(vec3(0.4, 0.8, 0.3))), 0.0);
+  vec3 c = vC * uTint * (0.55 + 0.55 * d);
+  float f = smoothstep(uFog.x, uFog.y, distance(vW, uCam));
+  gl_FragColor = vec4(mix(c, uSky, f), 1.0);
+}`;
+function shader(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, shader(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog); gl.useProgram(prog);
+const A = { pos: gl.getAttribLocation(prog, 'aPos'), nor: gl.getAttribLocation(prog, 'aNor'), col: gl.getAttribLocation(prog, 'aCol') };
+const U = {};
+for (const n of ['uVP', 'uM', 'uRot', 'uTint', 'uCam', 'uSky', 'uFog']) U[n] = gl.getUniformLocation(prog, n);
+gl.enableVertexAttribArray(A.pos); gl.enableVertexAttribArray(A.nor); gl.enableVertexAttribArray(A.col);
+gl.enable(gl.DEPTH_TEST);
+
+// Unit cube: list of [position, normal]
+const CUBE = [];
+for (let a = 0; a < 3; a++) for (const s of [-1, 1]) {
+  const u = (a + 1) % 3, v = (a + 2) % 3;
+  for (const [cu, cv2] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) {
+    const p = [0, 0, 0], n = [0, 0, 0];
+    p[a] = s * .5; p[u] = cu * .5; p[v] = cv2 * .5; n[a] = s;
+    CUBE.push([p, n]);
+  }
+}
+function makeBuffer(arr) {
+  const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW); return b;
+}
+function bind(b) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.vertexAttribPointer(A.pos, 3, gl.FLOAT, false, 36, 0);
+  gl.vertexAttribPointer(A.nor, 3, gl.FLOAT, false, 36, 12);
+  gl.vertexAttribPointer(A.col, 3, gl.FLOAT, false, 36, 24);
+}
+const cubeBuf = makeBuffer(CUBE.flatMap(([p, n]) => [...p, ...n, 1, 1, 1]));
+
+function hex(h) { return [(h >> 16 & 255) / 255, (h >> 8 & 255) / 255, (h & 255) / 255]; }
+
+// ---------- Matrix helpers ----------
+function persp(fov, asp, n, f) {
+  const t = 1 / Math.tan(fov / 2);
+  return [t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, 2 * f * n / (n - f), 0];
+}
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function norm(a) { const l = Math.hypot(...a); return [a[0] / l, a[1] / l, a[2] / l]; }
+function lookAt(e, c, up) {
+  const z = norm(sub(e, c)), x = norm(cross(up, z)), y = cross(z, x);
+  return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1];
+}
+function mul(a, b) {
+  const r = new Array(16);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    let s = 0; for (let k = 0; k < 4; k++) s += a[i + 4 * k] * b[k + 4 * j]; r[i + 4 * j] = s;
+  }
+  return r;
+}
+
+// ---------- Build the city (static geometry baked into one buffer) ----------
+let seed = 12345;
+function rnd() { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
+function pick(a) { return a[Math.floor(rnd() * a.length)]; }
+
+const N = 7, R = 12, B = 44, P = B + R, W = N * P;
+const LIM = 280; // how far past the town you can go
+const STATIC = [];
+// Everything solid: car bumps into the ones with car:true, the helicopter flies over all of them.
+const solids = [];
+function box(x, y, z, w, h, d, col) { // y = bottom
+  for (const [p, n] of CUBE) STATIC.push(x + p[0] * w, y + h / 2 + p[1] * h, z + p[2] * d, n[0], n[1], n[2], col[0], col[1], col[2]);
+}
+function solid(x, z, w, d, top, car = true) { solids.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, top, car }); }
+function tree(x, z) {
+  const s = 0.8 + rnd() * 0.6;
+  box(x, 0, z, .8, 2.2 * s, .8, hex(0x8a5a2b));
+  box(x, 2.2 * s, z, 3.2 * s, 2.6 * s, 3.2 * s, hex(pick([0x3fae49, 0x52c75a, 0x2e9a3e])));
+  box(x, 4.8 * s, z, 2 * s, 1.2 * s, 2 * s, hex(0x5fd16a));
+  solid(x, z, 1.6, 1.6, 6 * s);
+}
+// distance from a point to the town square (0 inside the town)
+function townDist(x, z) { return Math.hypot(Math.max(-x, 0, x - W), Math.max(-z, 0, z - W)); }
+
+const ROAD = hex(0x55595f), LINE = hex(0xffffff), YEL = hex(0xffd23f), WALK = hex(0xcfd3d8);
+const BUILD = [0xff8a80, 0xffb74d, 0xfff176, 0x81d4fa, 0xce93d8, 0xa5d6a7, 0xf48fb1, 0x90caf9, 0xffcc80].map(hex);
+const WINDOW = hex(0xe6f7ff);
+
+box(W / 2, -1, W / 2, W + 2 * LIM + 500, 1, W + 2 * LIM + 500, hex(0x7ccf6b)); // grass everywhere
+for (let i = 0; i <= N; i++) {
+  const c = i * P;
+  box(c, 0, W / 2, R, .02, W + R, ROAD);
+  box(W / 2, 0, c, W + R, .02, R, ROAD);
+  for (let j = 0; j < N; j++) {
+    const s0 = j * P + R / 2, s1 = (j + 1) * P - R / 2;
+    for (let t = s0 + 5; t < s1 - 4; t += 6) { // centre dashes
+      box(c, 0, t + 1.5, .35, .04, 3, YEL);
+      box(t + 1.5, 0, c, 3, .04, .35, YEL);
+    }
+    for (const e of [s0 + 1.5, s1 - 1.5]) for (let k = -2; k <= 2; k++) { // zebra crossings
+      box(c + k * 2.2, 0, e, 1.1, .04, 2.5, LINE);
+      box(e, 0, c + k * 2.2, 2.5, .04, 1.1, LINE);
+    }
+  }
+}
+
+for (let bi = 0; bi < N; bi++) for (let bj = 0; bj < N; bj++) {
+  const cx = bi * P + P / 2, cz = bj * P + P / 2, inner = B - 6;
+  box(cx, 0, cz, B, .12, B, WALK);
+  if (rnd() < 0.22) { // park
+    box(cx, 0, cz, inner, .16, inner, hex(0x8fdc6e));
+    if (rnd() < .6) box(cx, 0, cz, 14, .2, 10, hex(0x4fc3f7)); // pond
+    for (let k = 0; k < 9; k++) {
+      const x = cx + (rnd() - .5) * (inner - 4), z = cz + (rnd() - .5) * (inner - 4);
+      if (Math.abs(x - cx) < 9 && Math.abs(z - cz) < 7) continue;
+      tree(x, z);
+    }
+    continue;
+  }
+  box(cx, 0, cz, inner, .14, inner, hex(0xe9e4da));
+  for (const ox of [-1, 1]) for (const oz of [-1, 1]) {
+    const lx = cx + ox * inner / 4, lz = cz + oz * inner / 4, r = rnd();
+    if (r < .62) { // tall building with window bands
+      const w = 12 + rnd() * 5, d = 12 + rnd() * 5, h = 8 + Math.floor(rnd() * 8) * 4, col = pick(BUILD);
+      box(lx, 0, lz, w, h, d, col);
+      for (let y = 2; y < h - 1.5; y += 4) box(lx, y, lz, w + .12, 1.3, d + .12, WINDOW);
+      box(lx, h, lz, w + .6, .6, d + .6, col.map(v => v * .8));
+      solid(lx, lz, w, d, h + .6);
+    } else if (r < .88) { // little house
+      const w = 9 + rnd() * 3, d = 8 + rnd() * 3, col = pick(BUILD);
+      box(lx, 0, lz, w, 5, d, col);
+      box(lx, 5, lz, w + 1, 1, d + 1, hex(0xd84a3a));
+      box(lx, 6, lz, w - 2, 1, d - 2, hex(0xd84a3a));
+      box(lx, 0, lz + oz * (d / 2), 1.8, 3, .2, hex(0x8a5a2b)); // door
+      solid(lx, lz, w, d, 7);
+    } else {
+      tree(lx - 3, lz - 3); tree(lx + 3, lz + 3); tree(lx + 3, lz - 3);
+    }
+  }
+}
+
+// ---------- Countryside: mountains, a lake and lots of trees ----------
+const mountains = [];
+for (let tries = 0; mountains.length < 20 && tries < 2000; tries++) {
+  const x = -LIM + rnd() * (W + 2 * LIM), z = -LIM + rnd() * (W + 2 * LIM);
+  const r = 22 + rnd() * 38, d = townDist(x, z);
+  if (d < r + 45) continue;
+  if (mountains.some(m => Math.hypot(m.x - x, m.z - z) < (m.r + r) * .85)) continue;
+  mountains.push({ x, z, r, h: 22 + rnd() * 30 + Math.min(1, d / 220) * 35 });
+}
+const GREENS = [0x6dbb5a, 0x5aa84a].map(hex), ROCK = [0xa08f7c, 0x8d7d6c].map(hex), SNOW = [0xffffff, 0xeef5ff].map(hex);
+for (const m of mountains) {
+  const L = Math.ceil(m.h / 5);
+  let cx = m.x, cz = m.z;
+  for (let i = 0; i < L; i++) {
+    const f = i / L, size = 2 * m.r * (1 - f) * .95 + 6;
+    const col = (f < .45 ? GREENS : f < .78 || m.h < 45 ? ROCK : SNOW)[i % 2];
+    box(cx, i * 5, cz, size, 5, size, col);
+    solid(cx, cz, size, size, (i + 1) * 5, i === 0);
+    m.peak = { x: cx, z: cz, y: (i + 1) * 5 };
+    cx += (rnd() - .5) * m.r * .12; cz += (rnd() - .5) * m.r * .12;
+  }
+}
+let lake = null;
+for (let tries = 0; !lake && tries < 2000; tries++) {
+  const x = -LIM + rnd() * (W + 2 * LIM), z = -LIM + rnd() * (W + 2 * LIM), d = townDist(x, z);
+  if (d < 70 || d > 150) continue;
+  if (mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r + 60)) continue;
+  lake = { x, z };
+}
+box(lake.x, 0, lake.z, 84, .1, 64, hex(0xf3d98b)); // beach
+box(lake.x, 0, lake.z, 74, .2, 54, hex(0x3fa9f5));
+box(lake.x - 10, 0, lake.z + 8, 8, .6, 8, hex(0x6dbb5a)); // tiny island
+tree(lake.x - 10, lake.z + 8);
+solid(lake.x, lake.z, 74, 54, .2);
+function freeSpot(x, z, gap) {
+  return !solids.some(s => x > s.x0 - gap && x < s.x1 + gap && z > s.z0 - gap && z < s.z1 + gap) &&
+         !mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4 + gap);
+}
+for (let k = 0; k < 600; k++) {
+  const x = -LIM + rnd() * (W + 2 * LIM), z = -LIM + rnd() * (W + 2 * LIM);
+  if (townDist(x, z) > 14 && freeSpot(x, z, 3)) tree(x, z);
+}
+for (let k = 0; k < 45; k++) { // clouds
+  const x = -LIM + rnd() * (W + 2 * LIM), z = -LIM + rnd() * (W + 2 * LIM), y = 70 + rnd() * 25;
+  box(x, y, z, 18 + rnd() * 10, 4, 10 + rnd() * 6, [1.7, 1.7, 1.7]);
+  box(x + 6, y + 2, z + 2, 10, 4, 8, [1.7, 1.7, 1.7]);
+}
+const staticBuf = makeBuffer(STATIC), staticCount = STATIC.length / 9;
+
+// highest solid thing under (x, z), with a little extra margin around it
+function groundAt(x, z, m = 0) {
+  let g = 0;
+  for (const s of solids) if (s.top > g && x > s.x0 - m && x < s.x1 + m && z > s.z0 - m && z < s.z1 + m) g = s.top;
+  return g;
+}
+
+// ---------- Sounds ----------
+let ac = null, muted = false, engOsc, engGain, lfoDepth;
+function initAudio() {
+  ac = new AudioContext();
+  engOsc = ac.createOscillator(); engOsc.type = 'sawtooth';
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 350;
+  const chop = ac.createGain(); // wobbles the volume for the helicopter "chop chop" sound
+  const lfo = ac.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 13;
+  lfoDepth = ac.createGain(); lfoDepth.gain.value = 0;
+  lfo.connect(lfoDepth).connect(chop.gain); lfo.start();
+  engGain = ac.createGain(); engGain.gain.value = 0;
+  engOsc.connect(lp).connect(chop).connect(engGain).connect(ac.destination); engOsc.start();
+}
+function tone(freq, dur, type = 'square', vol = .12, when = 0, endFreq) {
+  if (!ac || muted) return;
+  const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + when;
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (endFreq) o.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t + dur);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur);
+}
+function horn() { for (const w of [0, .28]) { tone(392, .22, 'square', .08, w); tone(494, .22, 'square', .08, w); } }
+function chime() { [523, 659, 784, 1047].forEach((f, i) => tone(f, .25, 'triangle', .2, i * .08)); }
+function boing() { tone(320, .35, 'sine', .3, 0, 90); }
+function whoosh(up) { tone(up ? 200 : 900, .5, 'triangle', .25, 0, up ? 900 : 200); }
+function fanfare() { [523, 523, 784, 1047, 784, 1047].forEach((f, i) => tone(f, .2, 'triangle', .2, i * .12)); }
+
+// ---------- Game state ----------
+const car = { x: 3 * P, y: 0, z: P / 2, a: 0, v: 0, steer: 0 };
+const heli = { x: 0, y: 0, z: 0, a: 0, v: 0, rotor: 0, lift: 0 };
+const cam = { x: 3 * P, y: 6, z: P / 2 - 12 };
+const keys = new Set();
+let mode = 'car', started = false, score = 0, lastBoing = 0, T = 0, yayTimer = 0;
+const fog = [120, 280];
+const stars = [], confetti = [];
+const RAINBOW = [0xff5252, 0xffd740, 0x69f0ae, 0x40c4ff, 0xe040fb, 0xff9100].map(hex);
+const me = () => mode === 'car' ? car : heli;
+
+function roadStar() {
+  for (;;) {
+    const road = Math.floor(rnd() * (N + 1)) * P, along = 8 + rnd() * (W - 16);
+    const [x, z] = rnd() < .5 ? [road, along] : [along, road];
+    if (Math.hypot(x - me().x, z - me().z) > 40) return { x, y: 2.2, z, sky: false, phase: rnd() * 6 };
+  }
+}
+function skyStar() { // only the helicopter can reach these: on mountain tops or high above town
+  const phase = rnd() * 6;
+  if (rnd() < .5) { const p = pick(mountains).peak; return { x: p.x, y: p.y + 4, z: p.z, sky: true, phase }; }
+  const x = rnd() * W, z = rnd() * W;
+  return { x, y: groundAt(x, z, 3) + 12 + rnd() * 25, z, sky: true, phase };
+}
+for (let i = 0; i < 14; i++) stars.push(roadStar());
+for (let i = 0; i < 10; i++) stars.push(skyStar());
+
+function hits(x, z) {
+  const r = 1.7;
+  if (x < -LIM || x > W + LIM || z < -LIM || z > W + LIM) return true;
+  for (const o of solids) if (o.car && x > o.x0 - r && x < o.x1 + r && z > o.z0 - r && z < o.z1 + r) return true;
+  return false;
+}
+function puff(x, y, z, n) {
+  for (let k = 0; k < n; k++) confetti.push({
+    x, y, z, vx: (rnd() - .5) * 14, vy: 6 + rnd() * 10, vz: (rnd() - .5) * 14, floor: Math.max(.2, y - 3),
+    col: pick(RAINBOW), life: 1.6 + rnd()
+  });
+}
+const HELP = {
+  car: 'Arrows or WASD = drive · Space = beep beep! · H = helicopter · M = sound · Esc = leave fullscreen',
+  heli: 'Arrows = fly · W or Space = go up · S or Shift = go down · H = car · M = sound'
+};
+function setMode(m) {
+  mode = m;
+  document.getElementById('mode').textContent = m === 'car' ? 'H = 🚁' : 'H = 🚗';
+  document.getElementById('help').textContent = HELP[m];
+}
+setMode('car');
+function switchVehicle() {
+  if (mode === 'car') {
+    Object.assign(heli, { x: car.x, y: 0, z: car.z, a: car.a, v: 0, lift: 2.5 });
+    setMode('heli'); whoosh(true); puff(car.x, 1, car.z, 25);
+  } else {
+    // land the car right under the helicopter, or at the nearest free spot
+    let spot = null;
+    for (let r = 0; !spot && r < 300; r += 3)
+      for (let k = 0; k < 16 && !spot; k++) {
+        const x = heli.x + Math.cos(k / 16 * 6.283) * r, z = heli.z + Math.sin(k / 16 * 6.283) * r;
+        if (!hits(x, z)) spot = { x, z };
+      }
+    if (spot) Object.assign(car, spot);
+    Object.assign(car, { a: heli.a, v: 0, steer: 0 });
+    setMode('car'); whoosh(false); puff(car.x, 1, car.z, 25);
+  }
+}
+
+addEventListener('keydown', e => {
+  if (e.code.startsWith('Arrow') || e.code === 'Space' || e.code === 'Tab') e.preventDefault();
+  if (!started) {
+    started = true; document.getElementById('start').style.display = 'none';
+    initAudio();
+    document.documentElement.requestFullscreen?.().catch(() => {});
+    return;
+  }
+  if (e.repeat) return;
+  keys.add(e.code);
+  if (e.code === 'Space' && mode === 'car') horn();
+  if (e.code === 'KeyH' || e.code === 'Enter') switchVehicle();
+  if (e.code === 'KeyM') muted = !muted;
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+const held = (...c) => c.some(k => keys.has(k));
+
+function driveCar(dt) {
+  const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS');
+  const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
+  if (up) car.v += (car.v < 0 ? 30 : 14) * dt;
+  else if (down) car.v -= (car.v > 0 ? 30 : 10) * dt;
+  else car.v *= Math.pow(.35, dt);
+  car.v = Math.max(-8, Math.min(22, car.v));
+  const target = (left ? 1 : 0) - (right ? 1 : 0);
+  car.steer += (target - car.steer) * Math.min(1, dt * 8);
+  car.a += car.steer * 2.0 * dt * Math.max(-1, Math.min(1, car.v / 5));
+
+  const nx = car.x + Math.sin(car.a) * car.v * dt, nz = car.z + Math.cos(car.a) * car.v * dt;
+  let bumped = false;
+  if (!hits(nx, car.z)) car.x = nx; else bumped = true;
+  if (!hits(car.x, nz)) car.z = nz; else bumped = true;
+  if (bumped) {
+    if (Math.abs(car.v) > 3 && T - lastBoing > .5) { boing(); lastBoing = T; }
+    car.v *= -0.3;
+  }
+}
+
+function flyHeli(dt) {
+  const fwd = held('ArrowUp'), back = held('ArrowDown');
+  const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
+  const rise = held('KeyW', 'Space', 'PageUp'), sink = held('KeyS', 'ShiftLeft', 'ShiftRight', 'PageDown');
+  if (fwd) heli.v += 20 * dt; else if (back) heli.v -= 20 * dt; else heli.v *= Math.pow(.4, dt);
+  heli.v = Math.max(-10, Math.min(32, heli.v));
+  heli.a += ((left ? 1 : 0) - (right ? 1 : 0)) * 1.7 * dt;
+  heli.x = Math.max(-LIM, Math.min(W + LIM, heli.x + Math.sin(heli.a) * heli.v * dt));
+  heli.z = Math.max(-LIM, Math.min(W + LIM, heli.z + Math.cos(heli.a) * heli.v * dt));
+
+  const ground = groundAt(heli.x, heli.z, 3);
+  heli.lift -= dt;
+  if (heli.lift > 0) heli.y += (ground + 10 - heli.y) * Math.min(1, dt * 1.5); // automatic take-off
+  else if (rise) heli.y += 12 * dt;
+  else if (sink) heli.y -= 12 * dt;
+  heli.y = Math.min(110, heli.y);
+  if (heli.y < ground) heli.y += (ground - heli.y) * Math.min(1, dt * 8); // float up over things, never crash
+  heli.rotor += dt * 28;
+}
+
+function update(dt) {
+  if (mode === 'car') driveCar(dt); else flyHeli(dt);
+
+  const v = me(), vy = v.y + 1.5;
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i], sy = s.y + Math.sin(T * 3 + s.phase) * .5;
+    if (Math.hypot(s.x - v.x, s.z - v.z) < (mode === 'car' ? 3.5 : 5) && Math.abs(sy - vy) < 4.5) {
+      score++; document.getElementById('hud').textContent = '⭐ ' + score;
+      puff(s.x, sy, s.z, 40);
+      if (score % 5 === 0) {
+        fanfare(); yayTimer = 1.8;
+        document.getElementById('yay').textContent = pick(['Great job!', 'Super!', 'Wow!', 'Hooray!', 'Amazing!']);
+      } else chime();
+      stars[i] = s.sky ? skyStar() : roadStar();
+    }
+  }
+  for (const c of confetti) { c.vy -= 20 * dt; c.x += c.vx * dt; c.y = Math.max(c.floor, c.y + c.vy * dt); c.z += c.vz * dt; c.life -= dt; }
+  for (let i = confetti.length - 1; i >= 0; i--) if (confetti[i].life <= 0) confetti.splice(i, 1);
+  yayTimer -= dt;
+  document.getElementById('yay').classList.toggle('show', yayTimer > 0);
+
+  if (engGain) {
+    const t = ac.currentTime, h = mode === 'heli';
+    engGain.gain.setTargetAtTime(muted ? 0 : h ? .05 : .025 + Math.abs(car.v) * .002, t, .1);
+    engOsc.frequency.setTargetAtTime(h ? 70 + Math.abs(heli.v) * 1.5 : 45 + Math.abs(car.v) * 5, t, .1);
+    lfoDepth.gain.setTargetAtTime(h ? .9 : 0, t, .1);
+  }
+}
+
+// ---------- Drawing ----------
+const M = new Float32Array(16), ID = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+const SKY = hex(0x9fd8ff);
+function dbox(cx, cy, cz, w, h, d, yaw, col) {
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  M.set([c * w, 0, -s * w, 0, 0, h, 0, 0, s * d, 0, c * d, 0, cx, cy, cz, 1]);
+  gl.uniformMatrix4fv(U.uM, false, M); gl.uniform2f(U.uRot, c, s); gl.uniform3fv(U.uTint, col);
+  gl.drawArrays(gl.TRIANGLES, 0, 36);
+}
+function part(o, ox, oy, oz, w, h, d, col, extraYaw = 0) { // box relative to a vehicle
+  const c = Math.cos(o.a), s = Math.sin(o.a);
+  dbox(o.x + ox * c + oz * s, o.y + oy, o.z - ox * s + oz * c, w, h, d, o.a + extraYaw, col);
+}
+const RED = hex(0xe53935), DARKRED = hex(0xb71c1c), GLASS = hex(0xb3e5fc), TYRE = hex(0x222222),
+      LIGHT = hex(0xfff59d), TAIL = hex(0xff1744), SHADOW = hex(0x2f3a2f), GOLD = hex(0xffd600),
+      HELI = hex(0xffb300), HELIDARK = hex(0x37474f), BLADE = hex(0x263238);
+
+function drawCar() {
+  part(car, 0, .16, 0, 2.6, .04, 4.6, SHADOW);
+  part(car, 0, .95, 0, 2.2, .9, 4.2, RED);
+  part(car, 0, 1.75, -.3, 1.85, .75, 2.1, GLASS);
+  part(car, 0, 2.18, -.3, 2.0, .14, 2.3, DARKRED);
+  for (const sx of [-1, 1]) {
+    part(car, sx * 1.1, .5, 1.35, .5, .95, .95, TYRE, car.steer * .4);
+    part(car, sx * 1.1, .5, -1.35, .5, .95, .95, TYRE);
+    part(car, sx * .7, 1.0, 2.1, .5, .3, .1, LIGHT);
+    part(car, sx * .7, 1.0, -2.1, .5, .3, .1, TAIL);
+  }
+}
+function drawHeli() {
+  const g = groundAt(heli.x, heli.z), s = Math.max(1, 4 - (heli.y - g) * .03);
+  dbox(heli.x, g + .16, heli.z, s, .04, s * 1.6, heli.a, SHADOW);
+  part(heli, 0, 1.6, 0, 2.6, 2.2, 4.2, HELI);
+  part(heli, 0, 1.9, 1.9, 2.3, 1.6, 1.4, GLASS);
+  part(heli, 0, 2.1, -4.3, .6, .6, 5, HELI);
+  part(heli, 0, 2.8, -6.6, .25, 1.8, 1.0, RED);
+  part(heli, .35, 2.8, -6.6, .1, .2 + 1.8 * Math.abs(Math.cos(heli.rotor * 1.3)), .3, BLADE);
+  part(heli, 0, 3.0, 0, .3, .6, .3, HELIDARK);
+  part(heli, 0, 3.35, 0, .5, .1, 11, BLADE, heli.rotor);
+  part(heli, 0, 3.35, 0, .5, .1, 11, BLADE, heli.rotor + Math.PI / 2);
+  for (const sx of [-1, 1]) {
+    part(heli, sx * 1.3, .1, 0, .2, .2, 4.4, HELIDARK);
+    for (const sz of [-1, 1]) part(heli, sx * 1.15, .4, sz, .15, .6, .15, HELIDARK);
+  }
+}
+
+function draw() {
+  const v = me(), h = mode === 'heli', k = 1 - Math.exp(-dtDraw * 4);
+  const fx = Math.sin(v.a), fz = Math.cos(v.a), back = h ? 17 : 12;
+  const camY = Math.max(h ? v.y + 7 : 6, groundAt(cam.x, cam.z, 2) + 3);
+  cam.x += (v.x - fx * back - cam.x) * k;
+  cam.y += (camY - cam.y) * k;
+  cam.z += (v.z - fz * back - cam.z) * k;
+  fog[0] += ((h ? 200 : 120) - fog[0]) * k; fog[1] += ((h ? 520 : 280) - fog[1]) * k;
+  const view = lookAt([cam.x, cam.y, cam.z], [v.x + fx * 4, v.y + (h ? 2 : 1.5), v.z + fz * 4], [0, 1, 0]);
+  const vp = mul(persp(1.0, cv.width / cv.height, .3, 900), view);
+
+  gl.clearColor(SKY[0], SKY[1], SKY[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.uniformMatrix4fv(U.uVP, false, vp); gl.uniform3f(U.uCam, cam.x, cam.y, cam.z);
+  gl.uniform3fv(U.uSky, SKY); gl.uniform2f(U.uFog, fog[0], fog[1]);
+
+  bind(staticBuf);
+  gl.uniformMatrix4fv(U.uM, false, ID); gl.uniform2f(U.uRot, 1, 0); gl.uniform3f(U.uTint, 1, 1, 1);
+  gl.drawArrays(gl.TRIANGLES, 0, staticCount);
+
+  bind(cubeBuf);
+  if (h) drawHeli(); else drawCar();
+  for (const s of stars) {
+    const y = s.y + Math.sin(T * 3 + s.phase) * .5, r = T * 2 + s.phase, sz = s.sky ? 1.4 : 1;
+    if (!s.sky) dbox(s.x, .16, s.z, 1.8, .03, 1.8, 0, SHADOW);
+    dbox(s.x, y, s.z, 1.6 * sz, 1.6 * sz, 1.6 * sz, r, GOLD);
+    dbox(s.x, y, s.z, 1.1 * sz, 2.3 * sz, 1.1 * sz, r + .785, GOLD);
+  }
+  for (const c of confetti) dbox(c.x, c.y, c.z, .45, .45, .45, c.life * 5, c.col);
+}
+
+let last = performance.now(), dtDraw = 0;
+function frame(now) {
+  dtDraw = Math.min(.05, (now - last) / 1000); last = now; T += dtDraw;
+  if (started) update(dtDraw);
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
