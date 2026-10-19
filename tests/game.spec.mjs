@@ -497,3 +497,82 @@ test('climbing, the near plane moves out so far-off streets keep a steady depth'
   expect(await near(0)).toBeLessThan(1);
   expect(await near(300)).toBeGreaterThan(20);
 });
+
+// ---------- Sounds (#7) ----------
+
+test('sound logic: rising star chimes, tyre squeal and rotor spin-up', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => ({
+    steps: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(chimeStep),
+    squeal: [squealLevel(5, 1), squealLevel(22, 1), squealLevel(-22, -1), squealLevel(22, .5), squealLevel(15, .875)],
+    spinUp: [spinRotor(0, true, .75), spinRotor(0, true, 1.5), spinRotor(.9, true, 1)],
+    spinDown: [spinRotor(1, false, .5), spinRotor(1, false, 1), spinRotor(.2, false, 1)],
+  }));
+  expect(r.steps).toEqual([0, 1, 2, 3, -1, 0, 1, 2, 3, -1]);
+  expect(r.squeal.slice(0, 4)).toEqual([0, 1, 1, 0]);
+  expect(r.squeal[4]).toBeCloseTo(.25);
+  expect(r.spinUp).toEqual([.5, 1, 1]);
+  expect(r.spinDown).toEqual([.5, 0, 0]);
+});
+
+test('each set of five stars climbs the chime up to the fanfare, and the horn never stacks', async ({ page }) => {
+  const problems = await open(page);
+  await page.keyboard.press('KeyX'); // start, which also starts the sound
+  const r = await page.evaluate(() => {
+    const heard = [];
+    const realChime = chime, realFanfare = fanfare, realTone = tone;
+    chime = step => { heard.push(step); realChime(step); };
+    fanfare = () => { heard.push('fanfare'); realFanfare(); };
+    for (let i = 0; i < 10; i++) cheer(car.x, 2, car.z);
+    chime = realChime; fanfare = realFanfare;
+    let notes = 0;
+    tone = (...a) => { notes++; realTone(...a); };
+    lastHorn = -9; horn(); const one = notes;
+    for (let i = 0; i < 5; i++) horn(); // mashing Space in the same moment
+    tone = realTone;
+    return { heard, one, all: notes };
+  });
+  expect(r.heard).toEqual([0, 1, 2, 3, 'fanfare', 0, 1, 2, 3, 'fanfare']);
+  expect(r.one).toBeGreaterThan(0);
+  expect(r.all).toBe(r.one);
+  expect(problems).toEqual([]);
+});
+
+test('M mutes everything through the master volume and shows the muted speaker; a reload starts with sound', async ({ page }) => {
+  const problems = await open(page);
+  const icon = page.locator('#muted');
+  await expect(icon).toBeHidden();
+  await page.keyboard.press('KeyX');
+  expect(await page.evaluate(() => [ac instanceof AudioContext, limiter instanceof DynamicsCompressorNode, master instanceof GainNode, muted]))
+    .toEqual([true, true, true, false]);
+  await page.keyboard.press('KeyM');
+  await expect(icon).toBeVisible();
+  expect(await page.evaluate(() => muted)).toBe(true);
+  // the master volume fades to silence (only measurable while the browser lets audio run)
+  if (await page.evaluate(() => ac.state === 'running')) await page.waitForFunction(() => master.gain.value < .05, null, { timeout: 10_000 });
+  await page.keyboard.press('KeyM');
+  await expect(icon).toBeHidden();
+  expect(await page.evaluate(() => muted)).toBe(false);
+  await page.keyboard.press('KeyM');
+  await page.reload();
+  await page.waitForFunction(() => T > 0.3);
+  await expect(icon).toBeHidden();
+  expect(await page.evaluate(() => muted)).toBe(false);
+  expect(problems).toEqual([]);
+});
+
+test('switching vehicles quickly spins the rotor up and down without errors', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX');
+  for (let i = 0; i < 6; i++) await page.keyboard.press('KeyH');
+  expect(await page.evaluate(() => mode)).toBe('car');
+  await page.keyboard.press('KeyH');
+  await page.waitForFunction(() => mode === 'heli' && rotorSpin > .2, null, { timeout: 40_000 });
+  await page.keyboard.press('KeyH');
+  const landed = await page.evaluate(() => rotorSpin);
+  await page.waitForFunction(was => mode === 'car' && rotorSpin < was, landed, { timeout: 40_000 });
+  expect(await page.evaluate(() => [rotorSpin >= 0, rotorSpin <= 1])).toEqual([true, true]);
+  expect(problems).toEqual([]);
+});

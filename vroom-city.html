@@ -12,6 +12,8 @@
   #yay { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 120px; font-weight: 900; color: #ffd84a;
          text-shadow: 0 8px 0 #c76b00; opacity: 0; transform: scale(.5); transition: all .3s; pointer-events: none; }
   #yay.show { opacity: 1; transform: scale(1); }
+  #muted { position: fixed; right: 24px; bottom: 64px; font-size: 40px; text-shadow: 0 3px 0 #0005; display: none; pointer-events: none; }
+  #muted.show { display: block; }
   #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
            background: #4fb3ffd0; color: #fff; cursor: pointer; text-align: center; }
   #start h1 { font-size: 110px; margin: 0; text-shadow: 0 8px 0 #0003; }
@@ -24,6 +26,7 @@
 <div id="mode">H = 🚁</div>
 <div id="yay">Great job!</div>
 <div id="help"></div>
+<div id="muted" title="Sound is off: press M">🔇</div>
 <div id="start"><h1>🚗 Vroom City!</h1><p>Catch the stars! Press H to fly the helicopter 🚁</p><p>Drive into the lake to sail the speedboat 🚤</p><p>A rocket 🚀 is waiting at the edge of town</p><p>Press any key to start</p></div>
 <script>
 "use strict";
@@ -668,46 +671,117 @@ function groundAt(x, z, m = 0) {
 }
 
 // ---------- Sounds ----------
-let ac = null, muted = false, engOsc, engGain, lfoDepth, roarGain;
+// Everything plays into one master volume, then a soft limiter, so lots of sounds at once never get sharply loud.
+let ac = null, muted = false, master, limiter, noiseBuf, engOscs = [], engGain, lfoDepth, roarGain;
+let rotorLfo, rotorGain, squealGain, rotorSpin = 0, lastHorn = -9, lastToot = -9;
 function initAudio() {
-  ac = new AudioContext();
-  engOsc = ac.createOscillator(); engOsc.type = 'sawtooth';
-  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 350;
-  const chop = ac.createGain(); // wobbles the volume for the helicopter "chop chop" sound
-  const lfo = ac.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 13;
-  lfoDepth = ac.createGain(); lfoDepth.gain.value = 0;
-  lfo.connect(lfoDepth).connect(chop.gain); lfo.start();
-  engGain = ac.createGain(); engGain.gain.value = 0;
-  engOsc.connect(lp).connect(chop).connect(engGain).connect(ac.destination); engOsc.start();
-  // the rocket's roar: deep rumbling noise
-  const noise = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), d = noise.getChannelData(0);
-  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  const src = ac.createBufferSource(); src.buffer = noise; src.loop = true;
-  const rlp = ac.createBiquadFilter(); rlp.type = 'lowpass'; rlp.frequency.value = 420;
-  roarGain = ac.createGain(); roarGain.gain.value = 0;
-  src.connect(rlp).connect(roarGain).connect(ac.destination); src.start();
+  try {
+    ac = new AudioContext();
+    limiter = ac.createDynamicsCompressor();
+    limiter.threshold.value = -14; limiter.knee.value = 14; limiter.ratio.value = 5;
+    limiter.attack.value = .004; limiter.release.value = .2;
+    master = ac.createGain(); master.gain.value = muted ? 0 : .85;
+    master.connect(limiter).connect(ac.destination);
+    noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const noise = () => { const s = ac.createBufferSource(); s.buffer = noiseBuf; s.loop = true; s.start(); return s; };
+    const filter = (type, f, q = .7) => { const b = ac.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q; return b; };
+    const gain = v => { const g = ac.createGain(); g.gain.value = v; return g; };
+
+    // engine hum: two slightly detuned saws and a soft sub an octave down, warmed by a gentle low-pass
+    const lp = filter('lowpass', 320), chop = gain(1); // chop wobbles the volume for the rocket's and buggy's motors
+    const lfo = ac.createOscillator(); lfo.type = 'triangle'; lfo.frequency.value = 13;
+    lfoDepth = gain(0); lfo.connect(lfoDepth).connect(chop.gain); lfo.start();
+    engGain = gain(0);
+    engOscs = [['sawtooth', -7, .5], ['sawtooth', 7, .5], ['sine', 0, .6]].map(([type, cents, v]) => {
+      const o = ac.createOscillator(); o.type = type; o.detune.value = cents; o.connect(gain(v)).connect(lp); o.start(); return o;
+    });
+    lp.connect(chop).connect(engGain).connect(master);
+    // helicopter rotor: soft thumps of low noise, chopped by its own wobble that speeds up as the rotor spins up
+    const rotorLp = filter('lowpass', 160, 1.5); noise().connect(rotorLp);
+    const thump = gain(.5); rotorLfo = ac.createOscillator(); rotorLfo.type = 'sine'; rotorLfo.frequency.value = 2;
+    rotorLfo.connect(gain(.5)).connect(thump.gain); rotorLfo.start();
+    rotorGain = gain(0); rotorLp.connect(thump).connect(rotorGain).connect(master);
+    // tyre squeal: a narrow band of noise, faded in and out with the turn
+    squealGain = gain(0); noise().connect(filter('bandpass', 2300, 9)).connect(squealGain).connect(master);
+    // the rocket's roar: deep rumbling noise
+    roarGain = gain(0); noise().connect(filter('lowpass', 420)).connect(roarGain).connect(master);
+  } catch { ac = null; engGain = null; } // no sound on this browser; the game plays on silently
 }
-function tone(freq, dur, type = 'square', vol = .12, when = 0, endFreq) {
+function toggleMute() {
+  muted = !muted;
+  if (ac) master.gain.setTargetAtTime(muted ? 0 : .85, ac.currentTime, .02); // also hushes sounds already playing
+  document.getElementById('muted').classList.toggle('show', muted);
+}
+// one soft note: a quick fade in and a gentle fade out, optionally sliding to endFreq; detune doubles it for a warmer sound
+function tone(freq, dur, type = 'triangle', vol = .08, when = 0, endFreq, detune = 0) {
   if (!ac || muted) return;
-  const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + when;
-  o.type = type; o.frequency.setValueAtTime(freq, t);
-  if (endFreq) o.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
-  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t + dur);
-  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur);
+  const t = ac.currentTime + when, g = ac.createGain();
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(detune ? vol * .6 : vol, t + .012);
+  g.gain.exponentialRampToValueAtTime(.001, t + dur);
+  g.connect(master);
+  for (const c of detune ? [-detune, detune] : [0]) {
+    const o = ac.createOscillator(); o.type = type; o.detune.value = c;
+    o.frequency.setValueAtTime(freq, t);
+    if (endFreq) o.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
+    o.connect(g); o.start(t); o.stop(t + dur + .02);
+  }
 }
-function horn() { for (const w of [0, .28]) { tone(392, .22, 'square', .08, w); tone(494, .22, 'square', .08, w); } }
-function chime() { [523, 659, 784, 1047].forEach((f, i) => tone(f, .25, 'triangle', .2, i * .08)); }
-function boing() { tone(320, .35, 'sine', .3, 0, 90); }
-function whoosh(up) { tone(up ? 200 : 900, .5, 'triangle', .25, 0, up ? 900 : 200); }
-function fanfare() { [523, 523, 784, 1047, 784, 1047].forEach((f, i) => tone(f, .2, 'triangle', .2, i * .12)); }
-function toot() { for (const w of [0, .4]) { tone(233, w ? .45 : .3, 'sawtooth', .07, w); tone(349, w ? .45 : .3, 'sawtooth', .05, w); } }
-function splashSound() { tone(900, .4, 'triangle', .18, 0, 150); tone(260, .3, 'sine', .2, .04, 70); }
+// a short puff of filtered noise that sweeps from one pitch to another, for whooshes and splashes
+function hiss(dur, vol, from, to, when = 0, type = 'bandpass') {
+  if (!ac || muted) return;
+  const t = ac.currentTime + when, s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  s.buffer = noiseBuf; f.type = type; f.Q.value = 1.2;
+  f.frequency.setValueAtTime(from, t); f.frequency.exponentialRampToValueAtTime(to, t + dur);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + dur * .2); g.gain.exponentialRampToValueAtTime(.001, t + dur);
+  s.connect(f).connect(g).connect(master); s.start(t, Math.random()); s.stop(t + dur + .02);
+}
+// mashing the horn never stacks it louder: a new press waits until the last beep-beep is done
+function horn() {
+  if (T - lastHorn < .55) return;
+  lastHorn = T;
+  for (const w of [0, .26]) { tone(392, .2, 'square', .03, w, 0, 8); tone(494, .2, 'triangle', .06, w, 0, 8); }
+}
+function toot() {
+  if (T - lastToot < .9) return;
+  lastToot = T;
+  for (const w of [0, .4]) { const d = w ? .45 : .3; tone(233, d, 'sawtooth', .035, w, 0, 6); tone(349, d, 'triangle', .05, w, 0, 6); }
+}
+// stars 1 to 4 of every set of five climb one step of a major scale; the 5th is the fanfare (-1)
+const CHIME_NOTES = [523, 587, 659, 698];
+function chimeStep(n) { const k = (n - 1) % 5; return k === 4 ? -1 : k; }
+function chime(step = 0) {
+  const f = CHIME_NOTES[step];
+  [1, 1.25, 1.5, 2].forEach((m, i) => tone(f * m, .3, 'triangle', .07, i * .07, 0, 5));
+  tone(f * 4, .5, 'sine', .015, .21); // a little sparkle on top
+}
+function boing() { tone(320, .35, 'sine', .14, 0, 90); tone(480, .25, 'triangle', .03, 0, 140); }
+function whoosh(up) {
+  hiss(.6, .16, up ? 300 : 2500, up ? 2500 : 300);
+  tone(up ? 200 : 700, .5, 'sine', .04, 0, up ? 700 : 200);
+}
+function fanfare() {
+  [523, 523, 784, 1047, 784, 1047].forEach((f, i) => tone(f, i === 5 ? .5 : .2, 'triangle', .08, i * .12, 0, 7));
+  tone(262, .9, 'sine', .05, .36); // a soft low note underneath
+}
+function splashSound() {
+  hiss(.5, .2, 1800, 400); tone(260, .3, 'sine', .1, .03, 70);
+  for (let i = 0; i < 3; i++) tone(1200 + Math.random() * 900, .07, 'sine', .025, .12 + i * .07); // droplets
+}
 let lastQuack = 0;
 function quack() {
   if (T - lastQuack < .25) return;
   lastQuack = T; const f = 520 + drnd() * 120;
-  tone(f, .09, 'sawtooth', .06, 0, f * .7); tone(f * .95, .12, 'sawtooth', .06, .13, f * .65);
+  tone(f, .09, 'sawtooth', .035, 0, f * .7, 10); tone(f * .95, .12, 'sawtooth', .035, .13, f * .65, 10);
 }
+// how loud the tyres squeal: only fast, with the steering near full lock
+function squealLevel(v, steer) {
+  const fast = (Math.abs(v) - 11) / 8, lock = (Math.abs(steer) - .75) / .25;
+  return fast <= 0 || lock <= 0 ? 0 : Math.min(1, fast) * Math.min(1, lock);
+}
+// the rotor takes about 1.5 s to spin up and about 1 s to spin down, whatever happens in between
+function spinRotor(spin, flying, dt) { return Math.max(0, Math.min(1, spin + (flying ? dt / 1.5 : -dt))); }
 
 // ---------- Game state ----------
 const car = { x: 3 * P, y: 0, z: P / 2, a: 0, v: 0, steer: 0, spin: 0 };
@@ -917,7 +991,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && mode === 'car') horn();
   if (e.code === 'Space' && mode === 'boat') toot();
   if (e.code === 'KeyH' || e.code === 'Enter') switchVehicle();
-  if (e.code === 'KeyM') muted = !muted;
+  if (e.code === 'KeyM') toggleMute();
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -1029,8 +1103,8 @@ const turnKeys = () => (held('ArrowLeft', 'KeyA') ? 1 : 0) - (held('ArrowRight',
 function countdown(dt) {
   const before = rocket.count;
   rocket.count = Math.max(0, rocket.count - dt);
-  for (const n of [3, 2, 1]) if (before > n && rocket.count <= n) tone(660, .18, 'square', .1);
-  if (before > 0 && rocket.count === 0) { tone(990, .6, 'triangle', .18); whoosh(true); }
+  for (const n of [3, 2, 1]) if (before > n && rocket.count <= n) tone(660, .18, 'triangle', .08, 0, 0, 5);
+  if (before > 0 && rocket.count === 0) { tone(990, .6, 'triangle', .1, 0, 0, 6); whoosh(true); }
 }
 // straight up and down over a pad: speeds up like a real rocket, just much quicker, and hovers when you let go.
 // Going down it slows by itself near the ground, so it always lands softly. Returns true on touchdown.
@@ -1126,7 +1200,7 @@ function cheer(x, y, z) {
   if (score % 5 === 0) {
     fanfare(); yayTimer = 1.8;
     document.getElementById('yay').textContent = pick(['Great job!', 'Super!', 'Wow!', 'Hooray!', 'Amazing!']);
-  } else chime();
+  } else chime(chimeStep(score));
 }
 
 const MUSIC = [392, 523, 659, 784, 659, 523, 587, 784, 440, 587, 698, 880, 698, 587, 523, 659];
@@ -1149,7 +1223,7 @@ function update(dt) {
     }
   }
   if (scene !== 'earth' && (musicT -= dt) <= 0) { // gentle twinkly music in space and on the Moon
-    tone(MUSIC[musicI++ % MUSIC.length], 1.6, 'sine', .035); musicT = .55;
+    tone(MUSIC[musicI++ % MUSIC.length], 1.6, 'sine', .03); musicT = .55;
   }
   for (const c of confetti) { c.vy -= 20 * dt; c.x += c.vx * dt; c.y = Math.max(c.floor, c.y + c.vy * dt); c.z += c.vz * dt; c.life -= dt; }
   for (let i = confetti.length - 1; i >= 0; i--) if (confetti[i].life <= 0) confetti.splice(i, 1);
@@ -1157,15 +1231,21 @@ function update(dt) {
   yayTimer -= dt;
   document.getElementById('yay').classList.toggle('show', yayTimer > 0);
 
+  rotorSpin = spinRotor(rotorSpin, mode === 'heli', dt);
   if (engGain) {
     const t = ac.currentTime, h = mode === 'heli', b = mode === 'boat', bv = Math.abs(boat.v);
     const r = mode === 'rocket', g = mode === 'buggy', th = rocket.thrust, sp = scene === 'space';
-    engGain.gain.setTargetAtTime(muted ? 0 : r ? (sp ? .015 + th * .015 : .02 + th * .05) : g ? .02 + Math.abs(buggy.v) * .002 :
-      h ? .05 : b ? .03 + bv * .0025 : .025 + Math.abs(car.v) * .002, t, .1);
-    engOsc.frequency.setTargetAtTime(r ? (sp ? 55 : 38 + th * 25) : g ? 60 + Math.abs(buggy.v) * 4 :
-      h ? 70 + Math.abs(heli.v) * 1.5 : b ? 38 + bv * 4.5 : 45 + Math.abs(car.v) * 5, t, .1);
-    lfoDepth.gain.setTargetAtTime(r ? .25 : g ? .5 : h ? .9 : b ? .35 : 0, t, .1); // the boat's motor burbles a little
-    roarGain.gain.setTargetAtTime(muted || !r ? 0 : th * (sp ? .04 : .22), t, .15); // the roar fades to a hum in space
+    engGain.gain.setTargetAtTime(r ? (sp ? .015 + th * .015 : .02 + th * .05) : g ? .02 + Math.abs(buggy.v) * .002 :
+      h ? .02 : b ? .03 + bv * .0025 : .025 + Math.abs(car.v) * .002, t, .1);
+    const hz = r ? (sp ? 55 : 38 + th * 25) : g ? 60 + Math.abs(buggy.v) * 4 :
+      h ? 60 + Math.abs(heli.v) * 1.5 : b ? 38 + bv * 4.5 : 45 + Math.abs(car.v) * 5;
+    engOscs.forEach((o, i) => o.frequency.setTargetAtTime(i === 2 ? hz / 2 : hz, t, .1));
+    lfoDepth.gain.setTargetAtTime(r ? .25 : g ? .5 : b ? .35 : 0, t, .1); // the boat's motor burbles a little
+    // the rotor goes "chop chop", slow and low as it spins up and winding down after landing
+    rotorGain.gain.setTargetAtTime(rotorSpin * .14, t, .1);
+    rotorLfo.frequency.setTargetAtTime(2 + rotorSpin * 11 + (h ? Math.abs(heli.v) * .1 : 0), t, .1);
+    squealGain.gain.setTargetAtTime(mode === 'car' ? squealLevel(car.v, car.steer) * .05 : 0, t, .08);
+    roarGain.gain.setTargetAtTime(!r ? 0 : th * (sp ? .04 : .22), t, .15); // the roar fades to a hum in space
   }
 }
 
