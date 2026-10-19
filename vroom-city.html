@@ -817,6 +817,7 @@ const HELP = {
   boat: 'Arrows or WASD = steer the boat · Space = toot toot! · H = helicopter · M = sound',
   heli: 'Arrows = fly · W or Space = go up · S or Shift = go down · H = car · M = sound',
   carStation: 'Arrows or WASD = drive · Space = beep beep! · H = rocket · M = sound',
+  heliStation: 'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound',
   rocketPad: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · H = car · M = sound',
   rocketMoon: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · M = sound',
   rocketSpace: 'Arrows = fly · W or Space = go up · S or Shift = go down · M = sound',
@@ -825,9 +826,9 @@ const HELP = {
 const landed = () => mode === 'rocket' && scene === 'earth' && rocket.y === 0;
 // the badge and help line follow the vehicle, and where it is
 function refreshHud() {
-  const atStation = mode === 'car' && inStation(car.x, car.z);
-  const badge = { car: atStation ? 'H = 🚀' : 'H = 🚁', boat: 'H = 🚁', heli: 'H = 🚗', buggy: 'H = 🚀', rocket: landed() ? 'H = 🚗' : '🚀' }[mode];
-  const help = mode === 'car' && atStation ? 'carStation' : mode !== 'rocket' ? mode :
+  const atStation = (mode === 'car' && inStation(car.x, car.z)) || (mode === 'heli' && inStation(heli.x, heli.z));
+  const badge = { car: atStation ? 'H = 🚀' : 'H = 🚁', boat: 'H = 🚁', heli: atStation ? 'H = 🚀' : 'H = 🚗', buggy: 'H = 🚀', rocket: landed() ? 'H = 🚗' : '🚀' }[mode];
+  const help = atStation ? mode + 'Station' : mode !== 'rocket' ? mode :
     scene === 'space' ? 'rocketSpace' : scene === 'moon' ? 'rocketMoon' : 'rocketPad';
   const b = document.getElementById('mode'), h = document.getElementById('help');
   if (b.textContent !== badge) b.textContent = badge;
@@ -882,7 +883,7 @@ function backInRocket() { Object.assign(rocket, { y: 0, vy: 0, thrust: 0, auto: 
 function switchVehicle() {
   if (mode === 'rocket') { if (landed()) leaveRocket(); return; } // nothing happens in flight
   if (mode === 'buggy') { backInRocket(); return; }
-  if (mode === 'car' && inStation(car.x, car.z)) { boardRocket(); return; }
+  if ((mode === 'car' && inStation(car.x, car.z)) || (mode === 'heli' && inStation(heli.x, heli.z))) { boardRocket(); return; }
   if (mode !== 'heli') {
     const v = me();
     Object.assign(heli, { x: v.x, y: 0, z: v.z, a: v.a, v: 0, lift: 2.5 });
@@ -1355,11 +1356,14 @@ const earthMesh = globe(3, c => Math.abs(c[1]) > .95 ? hex(0xffffff) :
 const earthClouds = globe(3, c => blob(c, 9, 2.2) + blob(c, 17, .7) * .4 > .95 ? WHITE : null);
 const moonMesh = globe(2, c => hex(blob(c, 7, .9) > .6 ? 0x8f8f8f : blob(c, 11, 2) > .8 ? 0xa3a3a3 : 0xc4c4c4));
 const planetMeshes = planets.map(pl => globe(2, c => hex(pl.cols[Math.floor((c[1] + 1) * 4 + blob(c, 5, 1) * .5 + 8) % 3])));
+// three bands of short pieces that only just meet, so no two pieces share the same spot (that made it flicker)
 const ringMesh = build(o => {
-  for (let i = 0; i < 40; i++) {
-    const a = i / 40 * Math.PI * 2;
-    o(BOX, Math.sin(a) * .85, 0, Math.cos(a) * .85, .14, .01, .5, i % 2 ? hex(0xd7ccc8) : hex(0xbcaaa4), 0, a + Math.PI / 2);
-  }
+  [[.7, 0xbcaaa4], [.85, 0xd7ccc8], [1, 0xa1887f]].forEach(([r, col]) => {
+    for (let i = 0; i < 48; i++) {
+      const a = (i + .5) / 48 * Math.PI * 2;
+      o(BOX, Math.sin(a) * r, 0, Math.cos(a) * r, 2 * Math.PI * r / 48 * 1.01, .01, .14, hex(col), 0, a + Math.PI / 2);
+    }
+  });
 });
 // the space station: a long truss with big blue solar panels, two modules, and an astronaut outside
 const stationMesh = build(o => {

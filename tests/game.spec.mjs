@@ -316,7 +316,7 @@ test('launch station: at the edge of town away from the lake, clear of water, mo
   expect(r).toMatchObject({ clear: [], road: [], trees: 0, awayFromLake: true, onPad: true, onH: true, offPad: false });
 });
 
-test('at the station H boards the rocket; the helicopter lands on the H pad as the car', async ({ page }) => {
+test('at the station H boards the rocket, from the car or the helicopter on the H pad', async ({ page }) => {
   await open(page);
   const r = await page.evaluate(() => {
     const badge = () => document.getElementById('mode').textContent, help = () => document.getElementById('help').textContent, out = {};
@@ -325,8 +325,10 @@ test('at the station H boards the rocket; the helicopter lands on the H pad as t
     out.pad = [badge(), help()];
     switchVehicle(); out.board = [mode, scene, rocket.count > 3, badge(), help()];
     switchVehicle(); out.cancel = [mode, inStation(car.x, car.z)]; // still on the pad: H gives the car back
-    setMode('heli'); Object.assign(heli, { x: station.hx, z: station.hz, y: 20 }); switchVehicle();
-    out.heli = [mode, inStation(car.x, car.z), badge()];
+    setMode('heli'); Object.assign(heli, { x: station.hx, z: station.hz, y: 20 }); refreshHud();
+    out.heliPad = [badge(), help()];
+    switchVehicle(); out.heli = [mode, rocket.count > 3, badge()];
+    switchVehicle(); out.heliBack = [mode, inStation(car.x, car.z)];
     setMode('heli'); Object.assign(heli, { x: 3 * P, z: P / 2 }); switchVehicle(); out.elsewhere = badge();
     return out;
   });
@@ -334,7 +336,9 @@ test('at the station H boards the rocket; the helicopter lands on the H pad as t
     town: 'H = 🚁',
     pad: ['H = 🚀', 'Arrows or WASD = drive · Space = beep beep! · H = rocket · M = sound'],
     board: ['rocket', 'earth', true, 'H = 🚗', 'Hold W, Space or ↑ = blast off · S or ↓ = go down · H = car · M = sound'],
-    cancel: ['car', true], heli: ['car', true, 'H = 🚀'], elsewhere: 'H = 🚁',
+    cancel: ['car', true],
+    heliPad: ['H = 🚀', 'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound'],
+    heli: ['rocket', true, 'H = 🚗'], heliBack: ['car', true], elsewhere: 'H = 🚁',
   });
 });
 
