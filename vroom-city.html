@@ -31,21 +31,29 @@
 const cv = document.getElementById('c');
 const gl = cv.getContext('webgl', { antialias: true });
 // if the graphics card gives up, say so kindly instead of leaving a blank screen
-function sorry(msg) {
+function sorry(msg, note = '') {
   const s = document.getElementById('start');
-  s.innerHTML = `<h1>🚗 Vroom City!</h1><p>${msg}</p>`; s.style.display = '';
+  s.innerHTML = `<h1>🚗 Vroom City!</h1><p>${msg}</p><small style="opacity:.75;margin-top:24px;font-size:16px">${note}</small>`;
+  s.style.display = '';
 }
+// what was happening when the graphics last dropped out, kept so a grown-up can send it to us
+function lastDrop() { try { return localStorage.getItem('vroomDrop') || ''; } catch { return ''; } }
 if (!gl) {
-  sorry('The browser has paused 3D graphics 😴<br>Close every browser window, open it again and come back');
+  sorry('The browser has paused 3D graphics 😴<br>Close every browser window, open it again and come back', lastDrop());
   throw new Error('WebGL is not available');
 }
 cv.addEventListener('webglcontextlost', e => {
   e.preventDefault(); // lets the browser give the graphics back
   ac?.suspend();
-  sorry('Oops, the graphics took a little break<br>Press any key to play again');
-  addEventListener('keydown', () => document.location.reload(), { once: true });
+  const note = `Graphics dropped out: ${mode} ${scene} height ${Math.round(rocket.y)}, ${cv.width}×${cv.height}, ` +
+    `${Math.round(1000 / Math.max(1, frameMs))} fps, ${gpuName} (${new Date().toISOString().slice(0, 16)})`;
+  try { localStorage.setItem('vroomDrop', note); } catch { /* private mode */ }
+  sorry('Oops, the graphics took a little break<br>Press any key to play again', note);
+  addEventListener('keydown', () => location.reload(), { once: true });
 });
-cv.addEventListener('webglcontextrestored', () => document.location.reload());
+cv.addEventListener('webglcontextrestored', () => location.reload());
+const gpuInfo = gl.getExtension('WEBGL_debug_renderer_info');
+const gpuName = gpuInfo ? gl.getParameter(gpuInfo.UNMASKED_RENDERER_WEBGL) : 'unknown graphics';
 const quality = { shadows: false, maxDpr: 2 }; // the safety net lowers these on slow computers
 function resize() {
   const d = Math.min(devicePixelRatio || 1, quality.maxDpr);
@@ -1227,6 +1235,7 @@ function makePerfWatch(limitMs = 25, secs = 3, warmup = 2) {
 }
 const perfWatch = makePerfWatch();
 function lowerQuality() { quality.shadows = false; quality.maxDpr = 1; resize(); }
+if (lastDrop()) lowerQuality(); // the graphics dropped out here before, so go easy on this computer from the start
 
 // ---------- Drawing ----------
 const ID = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], WHITE = [1, 1, 1], NM = new Float32Array(9);
@@ -1543,6 +1552,13 @@ function drawMoonThings() {
   dbox(rocket.x, .02, rocket.z, 4.2, .02, 4.2, rocket.a, hex(0x8f8f8f));
 }
 
+// the near plane moves out as the camera pulls back, so far-off streets don't flicker through the ground
+function nearPlane() {
+  if (scene === 'space') return 1;
+  if (mode !== 'rocket') return .3;
+  const toRocket = Math.hypot(cam.x - rocket.x, cam.y - rocket.y, cam.z - rocket.z) - 25; // never clips the rocket itself
+  return Math.max(.5, Math.min(rocket.y * .1, toRocket * .5));
+}
 function draw() {
   const k = snapCam ? 1 : 1 - Math.exp(-dtDraw * 4), v = me(), goal = camGoal();
   snapCam = false;
@@ -1557,7 +1573,8 @@ function draw() {
   else { fog[0] += ((h ? 200 : 120) - fog[0]) * k; fog[1] += ((h ? 520 : 280) - fog[1]) * k; }
   const view = lookAt([cam.x, cam.y, cam.z], goal.at, [0, 1, 0]);
   const far = earth ? (r ? 900 + rocket.y * 3 : 900) : scene === 'space' ? 6000 : 3000;
-  const asp = cv.width / cv.height, vp = mul(persp(1.0, asp, scene === 'space' ? 1 : r ? .5 : .3, far), view);
+  const near = nearPlane();
+  const asp = cv.width / cv.height, vp = mul(persp(1.0, asp, near, far), view);
 
   // high above the town the shadows are too small to see, so the graphics card gets a rest
   const shadows = quality.shadows && earth && !(r && rocket.y > 40), dx = Math.sin(v.a), fz = Math.cos(v.a);
@@ -1640,9 +1657,10 @@ function draw() {
   gl.depthMask(true); gl.disable(gl.BLEND);
 }
 
-let last = performance.now(), dtDraw = 0;
+let last = performance.now(), dtDraw = 0, frameMs = 16;
 function frame(now) {
   const raw = now - last;
+  if (raw > 0 && raw < 1000) frameMs += (raw - frameMs) * .05;
   dtDraw = Math.min(.05, raw / 1000); last = now; T += dtDraw;
   if (perfWatch(raw)) lowerQuality();
   if (started) update(dtDraw);

@@ -455,9 +455,12 @@ test('if the graphics card gives up mid-game, a kind message shows and a key pre
   await lose.evaluate(l => l.loseContext());
   await expect(page.locator('#start')).toBeVisible();
   await expect(page.locator('#start')).toContainText('graphics took a little break');
+  await expect(page.locator('#start small')).toContainText('Graphics dropped out: car earth');
   await Promise.all([page.waitForEvent('load'), page.keyboard.press('KeyX')]);
   await page.waitForFunction(() => T > 0.3);
-  expect(await page.evaluate(() => gl.isContextLost())).toBe(false);
+  // after a drop the game starts in its lighter mode
+  expect(await page.evaluate(() => ({ lost: gl.isContextLost(), shadows: quality.shadows, dpr: quality.maxDpr })))
+    .toEqual({ lost: false, shadows: false, dpr: 1 });
 });
 
 test('when the browser has paused 3D graphics, the start screen says what to do', async ({ page }) => {
@@ -480,4 +483,13 @@ test('high in the climb the shadow pass is skipped', async ({ page }) => {
   }, y);
   expect(await fbBinds(0)).toBe(1);
   expect(await fbBinds(200)).toBe(0);
+});
+
+test('climbing, the near plane moves out so far-off streets keep a steady depth', async ({ page }) => {
+  await open(page);
+  await page.keyboard.press('KeyX');
+  await page.evaluate(() => { const [x, z] = station.world(0, -PADH + 5); Object.assign(car, { x, z }); switchVehicle(); rocket.count = 0; });
+  const near = y => page.evaluate(y => { rocket.y = y; snapCam = true; draw(); return nearPlane(); }, y);
+  expect(await near(0)).toBeLessThan(1);
+  expect(await near(300)).toBeGreaterThan(20);
 });

@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { Linter } from 'eslint';
 import js from '@eslint/js';
 
-const browser = Object.fromEntries(['window', 'document', 'addEventListener', 'innerWidth', 'innerHeight', 'devicePixelRatio',
+const browser = Object.fromEntries(['window', 'document', 'addEventListener', 'innerWidth', 'innerHeight', 'devicePixelRatio', 'localStorage', 'location',
   'performance', 'requestAnimationFrame', 'AudioContext', 'WebGLRenderingContext'].map(n => [n, 'readonly']));
 const node = Object.fromEntries(['process', 'console'].map(n => [n, 'readonly']));
 const linter = new Linter();
