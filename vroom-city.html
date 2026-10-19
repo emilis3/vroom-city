@@ -30,6 +30,22 @@
 // ---------- WebGL setup ----------
 const cv = document.getElementById('c');
 const gl = cv.getContext('webgl', { antialias: true });
+// if the graphics card gives up, say so kindly instead of leaving a blank screen
+function sorry(msg) {
+  const s = document.getElementById('start');
+  s.innerHTML = `<h1>🚗 Vroom City!</h1><p>${msg}</p>`; s.style.display = '';
+}
+if (!gl) {
+  sorry('The browser has paused 3D graphics 😴<br>Close every browser window, open it again and come back');
+  throw new Error('WebGL is not available');
+}
+cv.addEventListener('webglcontextlost', e => {
+  e.preventDefault(); // lets the browser give the graphics back
+  ac?.suspend();
+  sorry('Oops, the graphics took a little break<br>Press any key to play again');
+  addEventListener('keydown', () => document.location.reload(), { once: true });
+});
+cv.addEventListener('webglcontextrestored', () => document.location.reload());
 const quality = { shadows: false, maxDpr: 2 }; // the safety net lowers these on slow computers
 function resize() {
   const d = Math.min(devicePixelRatio || 1, quality.maxDpr);
@@ -1543,7 +1559,8 @@ function draw() {
   const far = earth ? (r ? 900 + rocket.y * 3 : 900) : scene === 'space' ? 6000 : 3000;
   const asp = cv.width / cv.height, vp = mul(persp(1.0, asp, scene === 'space' ? 1 : r ? .5 : .3, far), view);
 
-  const shadows = quality.shadows && earth, dx = Math.sin(v.a), fz = Math.cos(v.a);
+  // high above the town the shadows are too small to see, so the graphics card gets a rest
+  const shadows = quality.shadows && earth && !(r && rocket.y > 40), dx = Math.sin(v.a), fz = Math.cos(v.a);
   const lvp = shadows ? shadowPass([v.x + dx * 35, 0, v.z + fz * 35]) : ID;
   gl.viewport(0, 0, cv.width, cv.height);
   gl.depthMask(true); gl.clearColor(haze[0], haze[1], haze[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);

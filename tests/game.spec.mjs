@@ -447,3 +447,37 @@ test('with the keyboard: blast off, space, the Moon and the buggy all draw witho
   expect(await glError(page)).toBe(0);
   expect(problems).toEqual([]);
 });
+
+test('if the graphics card gives up mid-game, a kind message shows and a key press starts again', async ({ page }) => {
+  await open(page);
+  await page.keyboard.press('KeyX');
+  const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
+  await lose.evaluate(l => l.loseContext());
+  await expect(page.locator('#start')).toBeVisible();
+  await expect(page.locator('#start')).toContainText('graphics took a little break');
+  await Promise.all([page.waitForEvent('load'), page.keyboard.press('KeyX')]);
+  await page.waitForFunction(() => T > 0.3);
+  expect(await page.evaluate(() => gl.isContextLost())).toBe(false);
+});
+
+test('when the browser has paused 3D graphics, the start screen says what to do', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.addInitScript(() => { HTMLCanvasElement.prototype.getContext = () => null; });
+  await page.goto(GAME);
+  await expect(page.locator('#start')).toContainText('paused 3D graphics');
+  expect(errors).toEqual(['WebGL is not available']);
+});
+
+test('high in the climb the shadow pass is skipped', async ({ page }) => {
+  await open(page);
+  await page.keyboard.press('KeyX');
+  await page.evaluate(() => { const [x, z] = station.world(0, -PADH + 5); Object.assign(car, { x, z }); switchVehicle(); rocket.count = 0; });
+  const fbBinds = y => page.evaluate(y => {
+    rocket.y = y; let n = 0; const o = gl.bindFramebuffer.bind(gl);
+    gl.bindFramebuffer = (t, f) => { if (f) n++; o(t, f); };
+    draw(); gl.bindFramebuffer = o; return n;
+  }, y);
+  expect(await fbBinds(0)).toBe(1);
+  expect(await fbBinds(200)).toBe(0);
+});
