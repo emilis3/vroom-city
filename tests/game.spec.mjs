@@ -493,12 +493,11 @@ test('liftoff smoke and flame are unchanged on a computer that never dropped out
   await page.setViewportSize({ width: 400, height: 300 });
   await open(page);
   await liftOff(page);
-  const r = await page.evaluate(() => ({ easy, liftoff, size: fx.find(f => f.dust).size, lift: rocket.lift !== null,
-    w: cv.width, aa: gl.getContextAttributes().antialias }));
-  expect(r).toEqual({ easy: false, liftoff: { most: 50, rate: 50, size: 1, glow: 1 }, size: 1, lift: true, w: 400, aa: true });
+  const r = await page.evaluate(() => ({ easy, liftoff, size: fx.find(f => f.dust).size, lift: rocket.lift !== null }));
+  expect(r).toEqual({ easy: false, liftoff: { most: 50, rate: 50, size: 1, glow: 1 }, size: 1, lift: true });
 });
 
-test('after a drop-out, liftoff has less smoke, a smaller glow and a softer picture, and a new drop-out says so', async ({ page }) => {
+test('after a drop-out, liftoff has less smoke and a smaller glow, and a new drop-out says so', async ({ page }) => {
   await page.setViewportSize({ width: 400, height: 300 });
   await open(page, () => { localStorage.setItem('vroomDrop', 'earlier'); localStorage.setItem('vroomDrops', '2'); });
   await liftOff(page);
@@ -509,11 +508,6 @@ test('after a drop-out, liftoff has less smoke, a smaller glow and a softer pict
     return { easy, most, size: fx.find(f => f.dust).size };
   });
   expect(r).toEqual({ easy: true, most: 12, size: 2 / 3 });
-  // no edge smoothing, and the rocket ride is drawn at 60% resolution, sharp again in the car
-  expect(await page.evaluate(() => [gl.getContextAttributes().antialias, cv.width, cv.height])).toEqual([false, 240, 180]);
-  expect(await page.evaluate(() => { rocket.y = 0; rocket.vy = 0; switchVehicle(); return [mode, cv.width]; }))
-    .toEqual(['car', 400]);
-  await liftOff(page);
   const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
   await lose.evaluate(l => l.loseContext());
   await expect(page.locator('#start small')).toContainText(/Graphics dropped out: rocket earth height \d+, .* easy mode on, drop-out 3, \d+ s after liftoff, /);

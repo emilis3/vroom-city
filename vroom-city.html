@@ -32,7 +32,7 @@
 "use strict";
 // ---------- WebGL setup ----------
 const cv = document.getElementById('c');
-const gl = cv.getContext('webgl', { antialias: !lastDrop() }); // easy mode: no edge smoothing, a big saving on some chips
+const gl = cv.getContext('webgl', { antialias: true });
 // if the graphics card gives up, say so kindly instead of leaving a blank screen
 function sorry(msg, note = '') {
   const s = document.getElementById('start');
@@ -67,11 +67,8 @@ cv.addEventListener('webglcontextrestored', () => location.reload());
 const gpuInfo = gl.getExtension('WEBGL_debug_renderer_info');
 const gpuName = gpuInfo ? gl.getParameter(gpuInfo.UNMASKED_RENDERER_WEBGL) : 'unknown graphics';
 const quality = { shadows: false, maxDpr: 2 }; // the safety net lowers these on slow computers
-// easy mode draws the rocket ride at a lower resolution: at liftoff the whole town comes into view at once
-const rideScale = (easy, m) => easy && m === 'rocket' ? .6 : 1;
-let ride = 1;
 function resize() {
-  const d = Math.min(devicePixelRatio || 1, quality.maxDpr) * ride;
+  const d = Math.min(devicePixelRatio || 1, quality.maxDpr);
   cv.width = Math.round(innerWidth * d); cv.height = Math.round(innerHeight * d);
 }
 addEventListener('resize', resize); resize();
@@ -921,10 +918,7 @@ function refreshHud() {
   if (b.textContent !== badge) b.textContent = badge;
   if (h.textContent !== HELP[help]) h.textContent = HELP[help];
 }
-function setMode(m) {
-  mode = m; refreshHud();
-  if (rideScale(easy, m) !== ride) { ride = rideScale(easy, m); resize(); }
-}
+function setMode(m) { mode = m; refreshHud(); }
 setMode('car');
 // car and boat swap where the water starts, with a 1.5 margin either side of the shore so they never flicker
 const SHORE = 1.5;
