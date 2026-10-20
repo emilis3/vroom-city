@@ -467,6 +467,53 @@ test('if the graphics card gives up mid-game, a kind message shows and a key pre
     .toEqual({ lost: false, shadows: false, dpr: 1 });
 });
 
+test('drop-out note: easy mode, which drop-out, and seconds after liftoff only in a flying rocket', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const d = { mode: 'rocket', scene: 'earth', height: 6.6, w: 1536, h: 864, fps: 59.7, easy: true, n: 3, lift: 4.8,
+      gpu: 'ANGLE (Intel)', time: '2026-10-19T12:55' };
+    return [dropNote(d), dropNote({ ...d, lift: null }), dropNote({ ...d, mode: 'car', easy: false, n: 1 })];
+  });
+  expect(r).toEqual([
+    'Graphics dropped out: rocket earth height 7, 1536×864, 60 fps, easy mode on, drop-out 3, 4 s after liftoff, ANGLE (Intel) (2026-10-19T12:55)',
+    'Graphics dropped out: rocket earth height 7, 1536×864, 60 fps, easy mode on, drop-out 3, ANGLE (Intel) (2026-10-19T12:55)',
+    'Graphics dropped out: car earth height 7, 1536×864, 60 fps, easy mode off, drop-out 1, ANGLE (Intel) (2026-10-19T12:55)',
+  ]);
+  expect(await page.evaluate(() => [liftoffFx(false), liftoffFx(true)])).toEqual([
+    { most: 50, rate: 50, size: 1, glow: 1 }, { most: 12, rate: 12, size: 2 / 3, glow: .5 }]);
+});
+
+// boards the rocket, skips the countdown and holds Space until it's a little way up, with smoke rolling out
+const liftOff = page => page.evaluate(() => {
+  boardRocket(); rocket.count = 0; keys.add('Space');
+  for (let i = 0; i < 600 && !(rocket.y > 3 && fx.some(f => f.dust)); i++) update(1 / 60);
+});
+
+test('liftoff smoke and flame are unchanged on a computer that never dropped out', async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 300 });
+  await open(page);
+  await liftOff(page);
+  const r = await page.evaluate(() => ({ easy, liftoff, size: fx.find(f => f.dust).size, lift: rocket.lift !== null }));
+  expect(r).toEqual({ easy: false, liftoff: { most: 50, rate: 50, size: 1, glow: 1 }, size: 1, lift: true });
+});
+
+test('after a drop-out, liftoff has less smoke and a smaller glow, and a new drop-out says so', async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 300 });
+  await open(page, () => { localStorage.setItem('vroomDrop', 'earlier'); localStorage.setItem('vroomDrops', '2'); });
+  await liftOff(page);
+  // lots of frames with full thrust, kept low where the smoke rolls out: never more than 12 puffs at once
+  const r = await page.evaluate(() => {
+    let most = 0;
+    for (let i = 0; i < 300; i++) { update(1 / 60); rocket.y = 5; most = Math.max(most, fx.filter(f => f.dust).length); }
+    return { easy, most, size: fx.find(f => f.dust).size };
+  });
+  expect(r).toEqual({ easy: true, most: 12, size: 2 / 3 });
+  const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
+  await lose.evaluate(l => l.loseContext());
+  await expect(page.locator('#start small')).toContainText(/Graphics dropped out: rocket earth height \d+, .* easy mode on, drop-out 3, \d+ s after liftoff, /);
+  expect(await page.evaluate(() => localStorage.getItem('vroomDrops'))).toBe('3');
+});
+
 test('when the browser has paused 3D graphics, the start screen says what to do', async ({ page }) => {
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));

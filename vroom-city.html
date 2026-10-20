@@ -41,6 +41,13 @@ function sorry(msg, note = '') {
 }
 // what was happening when the graphics last dropped out, kept so a grown-up can send it to us
 function lastDrop() { try { return localStorage.getItem('vroomDrop') || ''; } catch { return ''; } }
+const easy = !!lastDrop(); // the graphics dropped out here before: easy mode, with a simple liftoff
+// the grey note under the drop-out message, with enough detail to tell where it went wrong
+function dropNote(d) {
+  return `Graphics dropped out: ${d.mode} ${d.scene} height ${Math.round(d.height)}, ${d.w}×${d.h}, ${Math.round(d.fps)} fps, ` +
+    `easy mode ${d.easy ? 'on' : 'off'}, drop-out ${d.n}, ` +
+    (d.mode === 'rocket' && d.lift !== null ? `${Math.floor(d.lift)} s after liftoff, ` : '') + `${d.gpu} (${d.time})`;
+}
 if (!gl) {
   sorry('The browser has paused 3D graphics 😴<br>Close every browser window, open it again and come back', lastDrop());
   throw new Error('WebGL is not available');
@@ -48,8 +55,10 @@ if (!gl) {
 cv.addEventListener('webglcontextlost', e => {
   e.preventDefault(); // lets the browser give the graphics back
   ac?.suspend();
-  const note = `Graphics dropped out: ${mode} ${scene} height ${Math.round(rocket.y)}, ${cv.width}×${cv.height}, ` +
-    `${Math.round(1000 / Math.max(1, frameMs))} fps, ${gpuName} (${new Date().toISOString().slice(0, 16)})`;
+  let n = 1;
+  try { n = (parseInt(localStorage.getItem('vroomDrops'), 10) || 0) + 1; localStorage.setItem('vroomDrops', n); } catch { /* private mode */ }
+  const note = dropNote({ mode, scene, height: rocket.y, w: cv.width, h: cv.height, fps: 1000 / Math.max(1, frameMs), easy, n,
+    lift: rocket.lift === null ? null : T - rocket.lift, gpu: gpuName, time: new Date().toISOString().slice(0, 16) });
   try { localStorage.setItem('vroomDrop', note); } catch { /* private mode */ }
   sorry('Oops, the graphics took a little break<br>Press any key to play again', note);
   addEventListener('keydown', () => location.reload(), { once: true });
@@ -788,7 +797,8 @@ const car = { x: 3 * P, y: 0, z: P / 2, a: 0, v: 0, steer: 0, spin: 0 };
 const heli = { x: 0, y: 0, z: 0, a: 0, v: 0, rotor: 0, lift: 0 };
 const boat = { x: 0, y: .2, z: 0, a: 0, v: 0, steer: 0, hop: 0, vy: 0, onRamp: false }; // hop = height above the water
 // count = countdown seconds left, thrust = how hard the engines push (0 to 1), auto = landing by itself
-const rocket = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, pitch: 0, count: 0, thrust: 0, auto: false };
+// lift = the time T the rocket last left the ground, or null
+const rocket = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, pitch: 0, count: 0, thrust: 0, auto: false, lift: null };
 const buggy = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, steer: 0, spin: 0, g: 0 };
 let scene = 'earth', snapCam = false; // earth, space or moon; snapCam jumps the camera after a scene change
 const cam = { x: 3 * P, y: 6, z: P / 2 - 12 };
@@ -924,7 +934,7 @@ function toCar() {
 function clearFx() { fx.length = 0; confetti.length = 0; snapCam = true; }
 function boardRocket() {
   Object.assign(rocket, { x: station.x, y: 0, z: station.z, a: station.a + Math.PI, // the camera looks back at town
-    v: 0, vy: 0, pitch: 0, count: 3.4, thrust: 0, auto: false });
+    v: 0, vy: 0, pitch: 0, count: 3.4, thrust: 0, auto: false, lift: null });
   scene = 'earth'; setMode('rocket'); whoosh(true); puff(station.x, MOUNTH + 1, station.z, 25);
 }
 function leaveRocket() { // the car comes back on the pad, between the rocket and the road, facing town
@@ -1115,6 +1125,7 @@ function climb(dt, up, down) {
   else rocket.vy *= Math.pow(.05, dt);
   const was = rocket.y;
   rocket.y = Math.max(0, rocket.y + rocket.vy * dt);
+  if (was === 0 && rocket.y > 0) rocket.lift = T;
   if (rocket.y === 0) rocket.vy = Math.max(0, rocket.vy);
   rocket.thrust += ((rocket.count > 0 ? 0 : up ? 1 : rocket.y > 0 ? .35 : 0) - rocket.thrust) * Math.min(1, dt * 5);
   return was > 0 && rocket.y === 0;
@@ -1251,9 +1262,12 @@ function update(dt) {
 
 // ---------- Little effects: dust, sparkles and splashes ----------
 const fx = [], DUST = hex(0xc9b48f), SPARK = [[1, 1, .8], [1, .9, .4], [1, 1, 1]];
-function dust(x, y, z, vx, vz) {
-  if (fx.filter(f => f.dust).length < 50) fx.push({ dust: true, x, y, z, vx, vy: .8 + drnd(), vz, life: 1.1, max: 1.1 });
+function dust(x, y, z, vx, vz, most = 50, size = 1) {
+  if (fx.filter(f => f.dust).length < most) fx.push({ dust: true, x, y, z, vx, vy: .8 + drnd(), vz, life: 1.1, max: 1.1, size });
 }
+// liftoff smoke and flame; easy mode draws much less see-through stuff, the heaviest work for some graphics chips
+const liftoffFx = easy => easy ? { most: 12, rate: 12, size: 2 / 3, glow: .5 } : { most: 50, rate: 50, size: 1, glow: 1 };
+const liftoff = liftoffFx(easy);
 function sparkle(x, y, z, n) {
   for (let k = 0; k < n; k++) {
     const a = drnd() * 6.283, b = drnd() * 2 - 1, sp = 4 + drnd() * 5, r = Math.sqrt(1 - b * b);
@@ -1284,9 +1298,9 @@ function updateFx(dt) {
       dust(heli.x + Math.cos(a) * 2.5, g + .3, heli.z + Math.sin(a) * 2.5, Math.cos(a) * sp, Math.sin(a) * sp);
     }
   }
-  if (mode === 'rocket' && scene !== 'space' && rocket.thrust > .5 && rocket.y < 25 && drnd() < dt * 50) { // smoke rolls out under the engines
+  if (mode === 'rocket' && scene !== 'space' && rocket.thrust > .5 && rocket.y < 25 && drnd() < dt * liftoff.rate) { // smoke rolls out under the engines
     const a = drnd() * 6.283, sp = 6 + drnd() * 6, base = scene === 'earth' ? MOUNTH : 0;
-    dust(rocket.x + Math.cos(a) * 3, base + .5, rocket.z + Math.sin(a) * 3, Math.cos(a) * sp, Math.sin(a) * sp);
+    dust(rocket.x + Math.cos(a) * 3, base + .5, rocket.z + Math.sin(a) * 3, Math.cos(a) * sp, Math.sin(a) * sp, liftoff.most, liftoff.size);
   }
   if (mode === 'buggy' && Math.abs(buggy.v) > 6 && buggy.y <= buggy.g + .02 && drnd() < dt * 20) { // moon dust behind the wheels
     const c = Math.cos(buggy.a), s = Math.sin(buggy.a);
@@ -1316,7 +1330,7 @@ function makePerfWatch(limitMs = 25, secs = 3, warmup = 2) {
 }
 const perfWatch = makePerfWatch();
 function lowerQuality() { quality.shadows = false; quality.maxDpr = 1; resize(); }
-if (lastDrop()) lowerQuality(); // the graphics dropped out here before, so go easy on this computer from the start
+if (easy) lowerQuality(); // the graphics dropped out here before, so go easy on this computer from the start
 
 // ---------- Drawing ----------
 const ID = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], WHITE = [1, 1, 1], NM = new Float32Array(9);
@@ -1604,7 +1618,8 @@ function drawFlame() {
   const th = rocket.thrust, fl = 1 + .12 * Math.sin(T * 40), b = rocketBase();
   if (mode !== 'rocket' || th < .02) return;
   setFog(1e5, 2e5);
-  draw3(glowBall, chain(b, mT(0, -1 - 2.5 * th, 0), mS(3.2, (4 + 6 * th) * fl, 3.2)), [1, .55, .2], .6 * th);
+  const g = liftoff.glow; // the outer glow, smaller in easy mode
+  draw3(glowBall, chain(b, mT(0, -1 - 2.5 * th, 0), mS(3.2 * g, (4 + 6 * th) * fl * g, 3.2 * g)), [1, .55, .2], .6 * th);
   draw3(glowBall, chain(b, mT(0, -.6 - 1.5 * th, 0), mS(1.8, (2.5 + 4 * th) * fl, 1.8)), [.75, .85, 1], .9 * th);
   setFog(fog[0], fog[1]);
 }
@@ -1717,7 +1732,7 @@ function draw() {
     draw3(disc, hub, WHITE, .22);
   }
   for (const f of fx) if (f.dust) {
-    const t = 1 - f.life / f.max, s = .5 + t * 1.6;
+    const t = 1 - f.life / f.max, s = (.5 + t * 1.6) * f.size;
     draw3(ball, chain(mT(f.x, f.y, f.z), mS(s, s * .8, s)), scene === 'moon' ? [.75, .75, .75] : DUST, .35 * (1 - t));
   }
   for (const f of fx) if (f.spray) {
