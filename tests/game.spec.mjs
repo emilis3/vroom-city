@@ -974,6 +974,35 @@ test('machines on their own stop for the car and wait; they stay inside the yard
   expect(r).toMatchObject({ waits: [true, true, true], goes: true, home: true, fence: [true, true] });
 });
 
+test('a crane on its own waits while the car is under the hook; the digger goes round the truck after a pushed-away big pile; no climbing in through the fence', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    const [gx, gz] = site.world(0, -40); setMode('car'); Object.assign(car, { x: gx, z: gz });
+    // the crane carries a block to the tower spot, but the car is parked there
+    machines.splice(0, machines.length, crane);
+    const [sx, sz] = STACK, b = blocks[0];
+    Object.assign(car, { x: sx, z: sz, v: 0 });
+    Object.assign(b, { held: true }); crane.held = b; crane.dir = 'build'; crane.act = null;
+    step(8); out.waits = [crane.held === b, b.held];
+    Object.assign(car, { x: gx, z: gz }); step(8); out.puts = [crane.held, b.held];
+    // the big pile pushed far from the digger's spot: the digger drives over and starts scooping
+    machines.push(digger, truck); piles.splice(1);
+    const big = piles[0], [bx, bz] = site.world(15, -15); Object.assign(big, { x: bx, z: bz });
+    Object.assign(digger, { x: digger.home.x, z: digger.home.z, load: 0, act: null });
+    const far = Math.hypot(digger.x - bx, digger.z - bz);
+    out.follows = step(60, () => digger.act) < 60 && Math.hypot(digger.x - bx, digger.z - bz) < far - 10;
+    // a machine just inside the fence, the car just outside it: no climbing in through the fence
+    machines.push(dozer); Object.assign(dozer, { x: site.world(0, YD - 3)[0], z: site.world(0, YD - 3)[1] });
+    Object.assign(car, { x: site.world(0, YD + 2.5)[0], z: site.world(0, YD + 2.5)[1] });
+    out.outside = nearMachine();
+    Object.assign(car, { x: site.world(0, YD - 7.5)[0], z: site.world(0, YD - 7.5)[1] });
+    out.inside = nearMachine() === dozer;
+    return out;
+  }, STEP);
+  expect(r).toEqual({ waits: [true, true], puts: [null, false], follows: true, outside: null, inside: true });
+});
+
 test('machines catch no stars, and the drive-around still works with sound', async ({ page }) => {
   const problems = await open(page);
   await page.keyboard.press('KeyX'); // start, which also starts the sound

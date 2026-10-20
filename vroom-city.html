@@ -885,7 +885,7 @@ const truck = { kind: 'truck', ...spot(-18.4, 0, 0), v: 0, steer: 0, spin: 0, r:
 const dozer = { kind: 'dozer', ...spot(0, -10, Math.PI / 2), v: 0, steer: 0, spin: 0, r: 3, blade: 0, bladeT: 0, leg: 0, jobT: 0, skip: null };
 const crane = { kind: 'crane', ...spot(25, 10, 0), v: 0, r: 3.4, reach: 10, hy: 20, held: null, act: null, dir: 'build' };
 const machines = [digger, truck, dozer, crane];
-for (const m of machines) Object.assign(m, { home: { x: m.x, z: m.z, a: m.a }, auto: false, blocked: 0, beepT: 0 });
+for (const m of machines) Object.assign(m, { home: { x: m.x, z: m.z, a: m.a }, auto: false, blocked: 0, round: 0, beepT: 0 });
 const MACHINE_ICON = { digger: '🚜', truck: '🚚', dozer: '🚜', crane: '🏗️' };
 const isMachine = md => md in MACHINE_ICON;
 const REACH = 6.6, MAXPILES = 12, TRUCKMAX = 4, HOOKUP = 20, STACKMAX = 8;
@@ -1494,20 +1494,22 @@ function actEffect(m, kind) {
     if (b) { b.held = true; m.held = b; thud(m); }
   } else releaseBlock(m);
 }
+// a block is never put down on a machine or the car
+const spotTaken = (x, z) => machines.some(o => Math.hypot(o.x - x, o.z - z) < o.r + 1.2) || (mode === 'car' && Math.hypot(car.x - x, car.z - z) < 3.8);
 function releaseBlock(c) {
   const b = c.held;
   if (!b) return;
   const [hx, hz] = hookAt(c);
-  // never onto a machine or the car
-  if (machines.some(o => Math.hypot(o.x - hx, o.z - hz) < o.r + 1.2) || (mode === 'car' && Math.hypot(car.x - hx, car.z - hz) < 3.8)) {
-    tone(150, .15, 'square', .05, 0, 100); return;
+  let at = null; // on the stack under the hook, or when that is full, on the ground beside it
+  if (!spotTaken(hx, hz)) {
+    const top = stackTop(hx, hz);
+    if (top <= (STACKMAX - 1) * 2) at = [hx, hz, top];
+    else for (const [dx, dz] of [[2.4, 0], [-2.4, 0], [0, 2.4], [0, -2.4]])
+      if (!at && stackTop(hx + dx, hz + dz) === 0 && !spotTaken(hx + dx, hz + dz)) at = [hx + dx, hz + dz, 0];
   }
-  Object.assign(b, { x: hx, z: hz, y: 0 });
-  for (const [dx, dz] of [[0, 0], [2.4, 0], [-2.4, 0], [0, 2.4], [0, -2.4]]) { // a full stack puts the block down beside it
-    const t = stackTop(hx + dx, hz + dz);
-    if (t <= (STACKMAX - 1) * 2) { Object.assign(b, { x: hx + dx, z: hz + dz, y: t }); break; }
-  }
-  b.held = false; c.held = null; thud(c);
+  if (!at) { const v = siteVol(c); if (v > 0) tone(150, .15, 'square', .05 * v, 0, 100); return; } // no room: it stays in the hook
+  Object.assign(b, { x: at[0], z: at[1], y: at[2], held: false });
+  c.held = null; thud(c);
 }
 function updateAct(m, dt) {
   const a = m.act;
@@ -1523,16 +1525,20 @@ function craneHeight(c) {
 }
 
 // ---- jobs when nobody is in the machine ----
-function blockedAhead(m) { // the car or another machine in the way
+function blockedAhead(m) { // the car or another machine in the way: 'car', 'machine' or false
   const x = m.x + Math.sin(m.a) * 4.5, z = m.z + Math.cos(m.a) * 4.5;
-  return (mode === 'car' && Math.hypot(car.x - x, car.z - z) < 6) || machines.some(o => o !== m && Math.hypot(o.x - x, o.z - z) < o.r + 1.5);
+  if (mode === 'car' && Math.hypot(car.x - x, car.z - z) < 6) return 'car';
+  return machines.some(o => o !== m && Math.hypot(o.x - x, o.z - z) < o.r + 1.5) && 'machine';
 }
-// drive towards a spot; true once there (or once it has been stuck behind something for 10 s, to move on to the next job)
+// drive towards a spot; true once there (or once it has been stuck behind something for 10 s, to move on to the next job).
+// It waits for the car; after 2 s behind a machine that isn't moving off, it steers round it.
 function goTo(m, tx, tz, dt, tol = 2.5) {
   if (Math.hypot(tx - m.x, tz - m.z) < tol) { m.blocked = 0; driveMachine(m, false, false, false, false, dt); return true; }
   const df = angDiff(m.a, Math.atan2(tx - m.x, tz - m.z)), stop = blockedAhead(m);
   m.blocked = stop ? m.blocked + dt : 0;
   if (m.blocked > 10) { m.blocked = 0; return true; }
+  if (stop === 'machine' && m.blocked > 2) m.round = 1.5; // swing away from it, then a bit more
+  if (m.round > 0) { m.round -= dt; driveMachine(m, true, false, false, true, dt, .4); return false; }
   driveMachine(m, !stop && Math.abs(df) < .9, false, df > .05, df < -.05, dt, .6);
   return false;
 }
@@ -1545,7 +1551,11 @@ function autoDigger(d, dt) {
   if (d.act) { driveMachine(d, false, false, false, false, dt); return; }
   let pile = null;
   for (const p of piles) if (Math.hypot(p.x - d.x, p.z - d.z) < 14 && (!pile || p.amount > pile.amount)) pile = p;
-  if (!pile) { goTo(d, d.home.x, d.home.z, dt, 1); return; }
+  if (!pile) { // back to its spot, or after the big pile if that has been pushed somewhere else
+    const big = piles.find(p => p.refill);
+    if (big && Math.hypot(big.x - d.home.x, big.z - d.home.z) > 14) goTo(d, big.x, big.z, dt, 9); else goTo(d, d.home.x, d.home.z, dt, 1);
+    return;
+  }
   let aim = pile;
   if (d.load && Math.hypot(truck.x - d.x, truck.z - d.z) < 12 && truck.load < TRUCKMAX && Math.abs(truck.v) < .5) aim = truck; // loads the truck when it waits
   if (faceTo(d, aim.x, aim.z, dt)) startAct(d);
@@ -1593,8 +1603,8 @@ function autoCrane(c, dt) {
   const near = (x, z) => Math.hypot(x - STACK[0], z - STACK[1]) < 3;
   if (c.held) { // build the tower; once all blocks are in it, put them back in their row
     let target = STACK;
-    if (c.dir === 'clear') target = SLOTS.find(s => !blocks.some(b => Math.hypot(b.x - s[0], b.z - s[1]) < 2.3)) || STACK;
-    if (aimCrane(c, target[0], target[1], dt)) startAct(c);
+    if (c.dir === 'clear') target = SLOTS.find(s => !blocks.some(b => !b.held && Math.hypot(b.x - s[0], b.z - s[1]) < 2.3)) || STACK;
+    if (aimCrane(c, target[0], target[1], dt) && !spotTaken(target[0], target[1])) startAct(c); // something under the hook: wait
     return;
   }
   let pick = null, pd = Infinity;
@@ -1649,8 +1659,10 @@ function updateSite(dt) {
   }
 }
 // climbing in and out
-function nearMachine() { // the machine within about 6 units of the car's side
+function nearMachine() { // the machine within about 6 units of the car's side, with the car inside the yard
   if (mode !== 'car') return null;
+  const [lx, lz] = site.local(car.x, car.z);
+  if (Math.abs(lx) > YW || Math.abs(lz) > YD) return null;
   let best = null, bd = 6;
   for (const m of machines) { const d = Math.hypot(m.x - car.x, m.z - car.z) - m.r; if (d < bd) { bd = d; best = m; } }
   return best;
