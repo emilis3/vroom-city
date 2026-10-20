@@ -867,7 +867,7 @@ const boat = { x: 0, y: .2, z: 0, a: 0, v: 0, steer: 0, hop: 0, vy: 0, onRamp: f
 // count = countdown seconds left, thrust = how hard the engines push (0 to 1), auto = landing by itself
 // lift = the time T the rocket last left the ground, or null
 const rocket = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, pitch: 0, count: 0, thrust: 0, auto: false, lift: null };
-const buggy = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, steer: 0, spin: 0, g: 0 };
+const buggy = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, steer: 0, spin: 0, g: 0, up: 0, peak: 0 }; // up = how fast a ramp is lifting it, peak = highest point of this jump
 let scene = 'earth', snapCam = false; // earth, space or moon; snapCam jumps the camera after a scene change
 const cam = { x: 3 * P, y: 6, z: P / 2 - 12 };
 const keys = new Set();
@@ -929,11 +929,48 @@ for (let tries = 0; craters.length < 16 && tries < 500; tries++) {
   if (craters.some(c => Math.hypot(c.x - x, c.z - z) < c.r + r + 4)) continue;
   craters.push({ x, z, r });
 }
+// Moon jump ramps: wedges that rise towards the heading a, then drop away. They and the Moon stars have their own
+// random numbers (mrnd), so laying them out never moves the town, space or the craters.
+let mseed = 4242;
+function mrnd() { mseed |= 0; mseed = mseed + 0x6D2B79F5 | 0; let t = Math.imul(mseed ^ mseed >>> 15, 1 | mseed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
+const RAMP_L = 12, RAMP_W = 7, RAMP_H = 6, RAMP_STAR = 21; // length, width and height; the star floats this far past the high end
+const rampLocal = (r, x, z) => ({ u: (x - r.x) * Math.sin(r.a) + (z - r.z) * Math.cos(r.a), v: (x - r.x) * Math.cos(r.a) - (z - r.z) * Math.sin(r.a) });
+const rampPoint = (r, u, v = 0) => ({ x: r.x + Math.sin(r.a) * u + Math.cos(r.a) * v, z: r.z + Math.cos(r.a) * u - Math.sin(r.a) * v });
+function rampHeight(r, x, z) {
+  const { u, v } = rampLocal(r, x, z);
+  return Math.abs(u) > RAMP_L / 2 || Math.abs(v) > RAMP_W / 2 ? 0 : RAMP_H * (u + RAMP_L / 2) / RAMP_L;
+}
+const moonRamps = [];
+for (let tries = 0; moonRamps.length < 3 && tries < 500; tries++) {
+  const p = mrnd() * 6.283, d = 45 + mrnd() * 55, r = { x: Math.cos(p) * d, z: Math.sin(p) * d, a: mrnd() * 6.283 };
+  const run = [-RAMP_L / 2 - 8, -RAMP_L / 2, 0, RAMP_L / 2, RAMP_L / 2 + 2].map(u => rampPoint(r, u)); // the run-up and the ramp
+  const far = rampPoint(r, RAMP_L / 2 + RAMP_STAR);
+  if (run.some(q => Math.hypot(q.x, q.z) > MOONR - 15) || Math.hypot(far.x, far.z) > MOONR - 15) continue;
+  if (run.some(q => craters.some(c => Math.hypot(c.x - q.x, c.z - q.z) < c.r + 4))) continue;
+  if (moonRamps.some(o => Math.hypot(o.x - r.x, o.z - r.z) < 40)) continue;
+  moonRamps.push(r);
+}
 function moonGround(x, z) {
   let h = 0;
   for (const c of craters) { const e = (Math.hypot(x - c.x, z - c.z) - c.r) / 1.4; h += .9 * Math.exp(-e * e); }
+  for (const r of moonRamps) h += rampHeight(r, x, z);
   return h;
 }
+// Moon stars: only the buggy can catch these, on the dust and floating past the high end of each ramp
+const moonStars = [];
+function moonGroundStar() {
+  for (;;) {
+    const a = mrnd() * 6.283, d = 14 + mrnd() * (MOONR - 34), x = Math.cos(a) * d, z = Math.sin(a) * d;
+    if (craters.some(c => Math.hypot(c.x - x, c.z - z) < c.r + 4)) continue;
+    if (moonRamps.some(r => { const l = rampLocal(r, x, z); return Math.abs(l.u) < RAMP_L / 2 + 4 && Math.abs(l.v) < RAMP_W / 2 + 4; })) continue;
+    if (moonStars.some(s => Math.hypot(s.x - x, s.z - z) < 10)) continue;
+    if (scene === 'moon' && Math.hypot(buggy.x - x, buggy.z - z) < 12) continue;
+    return { x, y: 2.2, z, ramp: -1, phase: mrnd() * 6 };
+  }
+}
+const moonRampStar = i => ({ ...rampPoint(moonRamps[i], RAMP_L / 2 + RAMP_STAR), y: 12, ramp: i, phase: mrnd() * 6 });
+for (let i = 0; i < 8; i++) moonStars.push(moonGroundStar());
+moonRamps.forEach((_, i) => moonStars.push(moonRampStar(i)));
 const tracks = []; // wheel marks in the moon dust: { x, z, a }
 
 function roadStar() {
@@ -1054,7 +1091,7 @@ function leaveMoon() {
   Object.assign(rocket, { x: MOON.x, y: MOON.y + MOON.r + 50, z: MOON.z, v: 0, vy: 0, pitch: 0, auto: false });
 }
 function buggyOut() { // the buggy rolls out of the rocket
-  Object.assign(buggy, { x: 4 * Math.sin(rocket.a + 1.57), y: 0, z: 4 * Math.cos(rocket.a + 1.57), a: rocket.a + 1.57, v: 6, vy: 0, steer: 0, g: 0 });
+  Object.assign(buggy, { x: 4 * Math.sin(rocket.a + 1.57), y: 0, z: 4 * Math.cos(rocket.a + 1.57), a: rocket.a + 1.57, v: 6, vy: 0, steer: 0, g: 0, up: 0, peak: 0 });
   setMode('buggy'); puff(buggy.x, 1, buggy.z, 15);
 }
 function backInRocket() { Object.assign(rocket, { y: 0, vy: 0, thrust: 0, auto: false }); setMode('rocket'); whoosh(true); puff(buggy.x, 1, buggy.z, 15); }
@@ -1287,16 +1324,35 @@ function driveBuggy(dt) {
   buggy.a += buggy.steer * 2.0 * dt * Math.max(-1, Math.min(1, buggy.v / 5));
   buggy.spin += buggy.v * dt / .6;
   const nx = buggy.x + Math.sin(buggy.a) * buggy.v * dt, nz = buggy.z + Math.cos(buggy.a) * buggy.v * dt;
-  if (Math.hypot(nx, nz) > MOONR - 4 || Math.hypot(nx - rocket.x, nz - rocket.z) < 3.4) { // edge of the surface, or the rocket
+  // a ramp can only be driven up from its low end: the sides and the high end are walls, unless the buggy flies over
+  const rampWall = moonRamps.some(r => {
+    const n = rampLocal(r, nx, nz), o = rampLocal(r, buggy.x, buggy.z), m = .6;
+    const inside = l => Math.abs(l.u) < RAMP_L / 2 + m && Math.abs(l.v) < RAMP_W / 2 + m;
+    return inside(n) && !inside(o) && buggy.y < 1 && !(o.u <= -RAMP_L / 2 - m && Math.abs(n.v) < RAMP_W / 2);
+  });
+  if (rampWall || Math.hypot(nx, nz) > MOONR - 4 || Math.hypot(nx - rocket.x, nz - rocket.z) < 3.4) { // ramp wall, edge of the surface, or the rocket
     if (Math.abs(buggy.v) > 3) softBoing();
     buggy.v *= -.3;
   } else { buggy.x = nx; buggy.z = nz; }
   const g = moonGround(buggy.x, buggy.z);
-  if (ground) { const rise = (g - buggy.g) / dt; buggy.vy = rise > 1 ? rise * .9 : 0; buggy.y = g; }
+  const lift = Math.max(0, (g - buggy.g) / dt), cliff = buggy.g - g > 2 && buggy.up > 1; // cliff: just drove off the high end of a ramp
+  if (cliff) { buggy.vy = buggy.up * 1.1; buggy.y = Math.max(buggy.y, buggy.g); buggy.peak = buggy.y; } // launched by the ramp
+  else if (ground) { buggy.vy = lift > 1 ? lift * .9 : 0; buggy.y = g; }
+  const wasAir = !ground || cliff;
   if (!ground || buggy.vy > 0) {
     buggy.vy -= MOON_G * dt; buggy.y += buggy.vy * dt;
-    if (buggy.y < g) { buggy.y = g; buggy.vy = 0; }
+    buggy.peak = Math.max(buggy.peak, buggy.y);
+    if (buggy.y < g) {
+      buggy.y = g; buggy.vy = 0;
+      if (wasAir && buggy.peak - g >= 2) { // landing from a big jump: a puff of moon dust and a boing
+        for (let k = 0; k < 10; k++) { const b = k / 10 * 6.283; dust(buggy.x, g + .3, buggy.z, Math.cos(b) * (2 + drnd() * 3), Math.sin(b) * (2 + drnd() * 3), 60, 1.6); }
+        softBoing();
+      }
+      buggy.peak = g;
+    }
   }
+  if (ground && !cliff && buggy.y <= g + .02) buggy.peak = g;
+  buggy.up = moonRamps.some(r => rampHeight(r, buggy.x, buggy.z) > .3) && buggy.y < g + 1.5 ? lift : 0;
   buggy.g = g;
   const last = tracks[tracks.length - 1];
   if (buggy.y <= g + .02 && Math.abs(buggy.v) > 1 && (!last || Math.hypot(last.x - buggy.x, last.z - buggy.z) > .9)) {
@@ -1633,6 +1689,13 @@ function update(dt) {
       stars[i] = s.water ? waterStar() : s.sky ? skyStar() : roadStar();
     }
   }
+  for (let i = 0; i < moonStars.length && scene === 'moon' && mode === 'buggy'; i++) {
+    const s = moonStars[i], sy = s.y + Math.sin(T * 3 + s.phase) * .5;
+    if (Math.hypot(s.x - buggy.x, s.z - buggy.z) < 3.5 && Math.abs(sy - (buggy.y + 1.5)) < 4.5) {
+      cheer(s.x, sy, s.z);
+      moonStars[i] = s.ramp < 0 ? moonGroundStar() : moonRampStar(s.ramp);
+    }
+  }
   if (scene !== 'earth' && (musicT -= dt) <= 0) { // gentle twinkly music in space and on the Moon
     tone(MUSIC[musicI++ % MUSIC.length], 1.6, 'sine', .03); musicT = .55;
   }
@@ -1949,6 +2012,15 @@ const moonWorld = (() => {
       put(ICO1, c.x + Math.cos(a) * c.r, 0, c.z + Math.sin(a) * c.r, 2.8, 1.8, 2.8, hex(0xb5b5b5));
     }
   }
+  const RS = 6; // each ramp is built from striped slices, orange and white
+  for (const r of moonRamps) for (let k = 0; k < RS; k++) {
+    const w = RAMP_W / 2, l = RAMP_L / RS / 2, h0 = RAMP_H * k / RS, h1 = RAMP_H * (k + 1) / RS, hm = (h0 + h1) / 2, m = rampPoint(r, -RAMP_L / 2 + (k + .5) * l * 2);
+    const P = (x, y, z) => [x, y - hm / 2, z];
+    const slice = [[P(-w, h0, -l), P(w, h0, -l), P(w, h1, l), P(-w, h1, l)], [P(-w, 0, l), P(w, 0, l), P(w, h1, l), P(-w, h1, l)],
+      [P(-w, 0, -l), P(w, 0, -l), P(w, h0, -l), P(-w, h0, -l)], [P(-w, 0, -l), P(-w, 0, l), P(-w, h1, l), P(-w, h0, -l)],
+      [P(w, 0, -l), P(w, 0, l), P(w, h1, l), P(w, h0, -l)]];
+    put(slice, m.x, hm / 2, m.z, 1, 1, 1, hex(k % 2 ? 0xf5f5f5 : 0xff7a1a), r.a);
+  }
   for (let i = 0; i < 70; i++) { // a ring of boulders round the edge, and a few pebbles
     const a = i / 70 * Math.PI * 2, s = 2 + drnd() * 3;
     put(ICO1, Math.cos(a) * (MOONR - 1), s * .2, Math.sin(a) * (MOONR - 1), s * 1.4, s, s * 1.2, hex(0x9a9a9a));
@@ -2161,6 +2233,10 @@ function drawSpaceThings() {
 function drawMoonThings() {
   draw3(moonWorld, ID);
   draw3(earthMesh, globeAt(-320, 260, -760, 80, T * .02)); // the Earth hangs in the black sky
+  for (const s of moonStars) {
+    const y = s.y + Math.sin(T * 3 + s.phase) * .5, sz = s.ramp < 0 ? 2.6 : 3.6;
+    draw3(starMesh, chain(mT(s.x, y, s.z), mRY(T * 2 + s.phase), mS(sz, sz, sz)));
+  }
   drawRocket();
   if (mode === 'buggy') { drawBuggy(); dbox(buggy.x, .03, buggy.z, 2.6, .02, 3.6, buggy.a, hex(0x8a8a8a)); }
   dbox(rocket.x, .02, rocket.z, 4.2, .02, 4.2, rocket.a, hex(0x8f8f8f));
@@ -2259,6 +2335,10 @@ function draw() {
   if (earth) for (const s of stars) {
     const y = s.y + Math.sin(T * 3 + s.phase) * .5, g = (s.sky ? 6.5 : 4.8) * (1 + .06 * Math.sin(T * 5 + s.phase));
     draw3(glowBall, chain(mT(s.x, y, s.z), mS(g, g, g)), [1, .8, .25], .4);
+  }
+  if (scene === 'moon') for (const s of moonStars) {
+    const g = (s.ramp < 0 ? 4.8 : 6.5) * (1 + .06 * Math.sin(T * 5 + s.phase));
+    draw3(glowBall, chain(mT(s.x, s.y + Math.sin(T * 3 + s.phase) * .5, s.z), mS(g, g, g)), [1, .8, .25], .4);
   }
   if (scene === 'space') for (const s of spaceStars) {
     const g = 22 * (1 + .06 * Math.sin(T * 5 + s.phase));

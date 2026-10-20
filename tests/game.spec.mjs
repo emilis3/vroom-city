@@ -427,6 +427,117 @@ test('the moon buggy bounces over crater rims, leaves tracks, and H flies home t
   expect(r.car).toEqual(['car', true]);
 });
 
+// ---------- Moon stars and jump ramps (#16) ----------
+
+test('moon: 3 striped ramps and 8 + 3 stars, laid out the same every time and clear of craters, rocket and edge', async ({ page }) => {
+  await open(page);
+  const layout = () => page.evaluate(() => ({ ramps: moonRamps, stars: moonStars }));
+  const r = await layout();
+  expect(r.ramps).toHaveLength(3);
+  expect(r.stars.filter(s => s.ramp < 0)).toHaveLength(8);
+  expect(r.stars.filter(s => s.ramp >= 0).map(s => s.ramp)).toEqual([0, 1, 2]);
+  const bad = await page.evaluate(() => {
+    const out = [];
+    for (const r of moonRamps) {
+      for (const u of [-RAMP_L / 2 - 8, -RAMP_L / 2, 0, RAMP_L / 2, RAMP_L / 2 + 2]) {
+        const q = rampPoint(r, u);
+        if (Math.hypot(q.x, q.z) > MOONR - 15) out.push('edge');
+        if (Math.hypot(q.x, q.z) < 20) out.push('rocket');
+        if (craters.some(c => Math.hypot(c.x - q.x, c.z - q.z) < c.r + 4)) out.push('crater');
+      }
+      if (moonRamps.some(o => o !== r && Math.hypot(o.x - r.x, o.z - r.z) < 40)) out.push('ramps');
+    }
+    for (const s of moonStars.filter(s => s.ramp < 0)) {
+      if (Math.hypot(s.x, s.z) < 12 || Math.hypot(s.x, s.z) > MOONR - 20) out.push('star spot');
+      if (craters.some(c => Math.hypot(c.x - s.x, c.z - s.z) < c.r + 4)) out.push('star crater');
+      if (moonRamps.some(r => { const l = rampLocal(r, s.x, s.z); return Math.abs(l.u) < RAMP_L / 2 + 4 && Math.abs(l.v) < RAMP_W / 2 + 4; })) out.push('star ramp');
+    }
+    return out;
+  });
+  expect(bad).toEqual([]);
+  await page.reload();
+  await page.waitForFunction(() => T > 0.3);
+  expect(await layout()).toEqual(r);
+});
+
+test('moon: the buggy catches ground stars and ramp stars, and each comes back', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnMoon(); step(30, () => mode === 'buggy');
+    const ground = moonStars.findIndex(s => s.ramp < 0), before = score, old = moonStars[ground];
+    Object.assign(buggy, { x: old.x, z: old.z, v: 0 }); buggy.g = buggy.y = moonGround(old.x, old.z); step(1 / 60);
+    out.ground = [score - before, moonStars[ground] !== old, moonStars.filter(s => s.ramp < 0).length];
+    const ri = moonStars.findIndex(s => s.ramp === 1), oldR = moonStars[ri], b2 = score;
+    Object.assign(buggy, { x: oldR.x, z: oldR.z, y: oldR.y - 1.5, vy: 0, v: 0 }); step(1 / 60);
+    out.ramp = [score - b2, moonStars[ri].ramp, moonStars[ri].x === oldR.x && moonStars[ri].z === oldR.z];
+    const far = moonStars.findIndex(s => s.ramp < 0), b3 = score; // the rocket can't catch them, and a buggy far below can't either
+    Object.assign(buggy, { x: moonStars[far].x, z: moonStars[far].z, y: 8, vy: 0, v: 0, g: 0 }); step(1 / 60);
+    out.high = score - b3;
+    return out;
+  }, STEP);
+  expect(r.ground).toEqual([1, true, 8]);
+  expect(r.ramp).toEqual([1, 1, true]);
+  expect(r.high).toBe(0);
+});
+
+test('moon: a fast run up a ramp reaches its star and lands with dust, a slow run does not', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP);
+    setMode('rocket'); landOnMoon(); step(30, () => mode === 'buggy');
+    const run = speed => {
+      const ramp = moonRamps[0], st = rampPoint(ramp, -RAMP_L / 2 - 14), star = moonStars.find(q => q.ramp === 0);
+      Object.assign(buggy, { x: st.x, z: st.z, a: ramp.a, v: speed, vy: 0, up: 0, peak: 0 });
+      buggy.g = buggy.y = moonGround(st.x, st.z); keys.clear(); fx.length = 0;
+      let top = 0, dust = 0, caught = false;
+      for (let i = 0; i < 60 * 9; i++) {
+        if (buggy.y < buggy.g + .05) buggy.v = speed; // hold the speed while on the ground
+        update(1 / 60); top = Math.max(top, buggy.y); dust = Math.max(dust, fx.filter(f => f.dust).length);
+        if (moonStars.find(q => q.ramp === 0) !== star) caught = true;
+      }
+      return { top, dust, caught };
+    };
+    const rim = Math.max(...craters.map(c => moonGround(c.x + c.r, c.z)));
+    return { fast: run(14), slow: run(3), rim, ramp: RAMP_H };
+  }, STEP);
+  expect(r.fast.caught).toBe(true);
+  expect(r.fast.top).toBeGreaterThan(r.ramp + 2); // clearly above the ramp, far above a crater rim
+  expect(r.fast.top).toBeGreaterThan(r.rim * 5);
+  expect(r.fast.dust).toBeGreaterThanOrEqual(8); // the landing puff
+  expect(r.slow.caught).toBe(false);
+  expect(r.slow.top).toBeLessThan(r.ramp + 1); // only up the slope, no flight
+});
+
+test('moon: the sides and high end of a ramp are walls, so backwards and sideways runs give no big jump', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnMoon(); step(30, () => mode === 'buggy');
+    const ramp = moonRamps[0];
+    const go = (u, v, heading) => { // start beside the ramp and drive at it
+      const st = rampPoint(ramp, u, v);
+      Object.assign(buggy, { x: st.x, z: st.z, a: ramp.a + heading, v: 12, vy: 0, up: 0, peak: 0 });
+      buggy.g = buggy.y = moonGround(st.x, st.z); fx.length = 0;
+      let top = 0;
+      for (let i = 0; i < 180; i++) {
+        if (buggy.y < buggy.g + .05) buggy.v = 12;
+        update(1 / 60); top = Math.max(top, buggy.y);
+      }
+      return top;
+    };
+    out.back = go(RAMP_L / 2 + 8, 0, Math.PI);          // down the high end, from behind
+    out.side = go(0, RAMP_W / 2 + 8, -Math.PI / 2);     // across from the right
+    out.side2 = go(0, -RAMP_W / 2 - 8, Math.PI / 2);    // across from the left
+    out.front = go(-RAMP_L / 2 - 10, 0, 0);              // the right way up
+    return out;
+  }, STEP);
+  expect(r.back).toBeLessThan(1);
+  expect(r.side).toBeLessThan(1);
+  expect(r.side2).toBeLessThan(1);
+  expect(r.front).toBeGreaterThan(5);
+});
+
 test('with the keyboard: blast off, space, the Moon and the buggy all draw without errors', async ({ page }) => {
   test.setTimeout(150_000);
   await page.setViewportSize({ width: 400, height: 300 });
