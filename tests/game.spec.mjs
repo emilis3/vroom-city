@@ -33,9 +33,12 @@ test('loads, draws frames and needs nothing from the network', async ({ page }) 
 test('town, collisions and stars are exactly where they were before', async ({ page }) => {
   await open(page);
   const now = await page.evaluate(() => ({ stars, solids: solids.slice(0, station.firstSolid), mountains: mountains.map(m => ({ x: m.x, z: m.z, r: m.r, h: m.h })), lake }));
-  // only the few countryside trees where the launch station now stands are gone
-  const kept = await page.evaluate(all => all.filter(s => !inStationArea((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2, 3)), LAYOUT.solids);
-  expect(LAYOUT.solids.length - kept.length).toBeLessThan(15);
+  // only the few countryside trees where the launch station and the construction site now stand are gone
+  const kept = await page.evaluate(all => all.filter(s => {
+    const x = (s.x0 + s.x1) / 2, z = (s.z0 + s.z1) / 2;
+    return !inStationArea(x, z, 3) && !inSiteArea(x, z, 3);
+  }), LAYOUT.solids);
+  expect(LAYOUT.solids.length - kept.length).toBeLessThan(30);
   expect(now.solids).toEqual(kept);
   expect(now.mountains).toEqual(LAYOUT.mountains);
   expect(now.lake).toEqual(LAYOUT.lake);
@@ -621,5 +624,300 @@ test('switching vehicles quickly spins the rotor up and down without errors', as
   const landed = await page.evaluate(() => rotorSpin);
   await page.waitForFunction(was => mode === 'car' && rotorSpin < was, landed, { timeout: 40_000 });
   expect(await page.evaluate(() => [rotorSpin >= 0, rotorSpin <= 1])).toEqual([true, true]);
+  expect(problems).toEqual([]);
+});
+
+// ---------- Construction site (#9) ----------
+
+test('construction site: out in the countryside, clear of water, mountains and the station, with a track from a town road', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const bad = [], track = [];
+    for (let lx = -YW - 6; lx <= YW + 6; lx += 2) for (let lz = -YD - TRACK; lz <= YD + 6; lz += 2) {
+      const [x, z] = site.world(lx, lz);
+      if (wet(x, z, 5) || mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4) || inStationArea(x, z, 5)) bad.push([lx, lz]);
+    }
+    for (let t = -YD - TRACK + 2; t <= -YD + 3; t += 2) { const [x, z] = site.world(0, t); if (hits(x, z)) track.push(t); } // the car can drive the whole track and through the gate
+    const [sx, sz] = site.world(0, -YD - TRACK);
+    return {
+      bad, track, trackStart: townDist(sx, sz), fromTown: townDist(site.x, site.z),
+      fence: [hits(...site.world(YW / 2, -YD)), hits(...site.world(YW, 0)), hits(...site.world(-YW, 5)), hits(...site.world(5, YD))],
+      trees: solids.slice(0, station.firstSolid).filter(s => inSiteArea((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2)).length,
+      stars: stars.filter(s => inSiteArea(s.x, s.z)).length,
+    };
+  });
+  expect(r).toMatchObject({ bad: [], track: [], fence: [true, true, true, true], trees: 0, stars: 0 });
+  expect(r.trackStart).toBeLessThan(8);
+  expect(r.fromTown).toBeGreaterThan(55);
+  expect(r.fromTown).toBeLessThan(130);
+});
+
+test('dirt piles: dirt lands on a pile or starts one, twelve at most, the big pile never runs low and fills up again', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const out = {};
+    piles.splice(0);
+    const [x, z] = site.world(0, 0);
+    addDirt(x, z); addDirt(x + .5, z);
+    out.joined = [piles.length, piles[0].amount];
+    addDirt(x + 15, z); out.apart = piles.length;
+    for (let i = 0; i < 30; i++) addDirt(x - 28 + (i % 6) * 9, z + (i % 5) * 9 - 18);
+    out.most = piles.length;
+    const before = piles.reduce((n, p) => n + p.amount, 0); addDirt(x, z + 3); out.kept = piles.reduce((n, p) => n + p.amount, 0) - before; // none lost
+    piles.splice(0); addDirt(site.x + 500, site.z + 500); out.inside = inYard(piles[0].x, piles[0].z);
+    piles.splice(0); addDirt(x, z); takeDirt(piles[0]); out.gone = piles.length;
+    piles.splice(0); addPile(0, 0, 40, true); const big = piles[0];
+    for (let i = 0; i < 60; i++) takeDirt(big);
+    out.low = big.amount;
+    for (let i = 0; i < 310; i++) updateSite(1 / 60); // 5 s
+    out.refilled = big.amount;
+    big.amount = 39; for (let i = 0; i < 620; i++) updateSite(1 / 60);
+    out.full = big.amount;
+    return out;
+  });
+  expect(r).toEqual({ joined: [1, 2], apart: 2, most: 12, kept: 1, inside: true, gone: 0, low: 5, refilled: 6, full: 40 });
+});
+
+test('H climbs into the machine next to the car and back out; the badge and help line follow', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const badge = () => document.getElementById('mode').textContent, help = () => document.getElementById('help').textContent, out = {};
+    piles.splice(0); blocks.splice(0); // nothing in the way of the car
+    for (const m of machines) {
+      let spot = null;
+      for (let k = 0; k < 16 && !spot; k++) {
+        const x = m.x + Math.cos(k * .4) * (m.r + 2.6), z = m.z + Math.sin(k * .4) * (m.r + 2.6);
+        if (!hits(x, z)) spot = { x, z };
+      }
+      setMode('car'); Object.assign(car, spot, { v: 0 }); refreshHud();
+      out[m.kind] = [badge(), help()];
+      switchVehicle(); out[m.kind + 'In'] = [mode, badge(), help()];
+      switchVehicle(); out[m.kind + 'Out'] = [mode, hits(car.x, car.z), Math.hypot(car.x - m.x, car.z - m.z) < 14, inYard(car.x, car.z)];
+    }
+    const [gx, gz] = site.world(0, -30); setMode('car'); Object.assign(car, { x: gx, z: gz }); refreshHud(); out.gate = badge();
+    setMode('heli'); Object.assign(heli, { x: digger.x, y: 20, z: digger.z }); switchVehicle(); out.heliLands = [mode, hits(car.x, car.z)];
+    return out;
+  });
+  const car = 'Arrows or WASD = drive · Space = beep beep! · H = climb in · M = sound';
+  const back = ['car', false, true, true];
+  expect(r).toEqual({
+    digger: ['H = 🚜', car], diggerIn: ['digger', 'H = 🚗', 'Arrows or WASD = drive · Space = scoop or dump · H = car · M = sound'], diggerOut: back,
+    truck: ['H = 🚚', car], truckIn: ['truck', 'H = 🚗', 'Arrows or WASD = drive · Space = tip the load · H = car · M = sound'], truckOut: back,
+    dozer: ['H = 🚜', car], dozerIn: ['dozer', 'H = 🚗', 'Arrows or WASD = drive · Space = blade up or down · H = car · M = sound'], dozerOut: back,
+    crane: ['H = 🏗️', car], craneIn: ['crane', 'H = 🚗', 'Arrows = swing the arm and move the hook · Space = grab or let go · H = car · M = sound'], craneOut: back,
+    gate: 'H = 🚁', heliLands: ['car', false],
+  });
+});
+
+test('digger: scoops from the big pile, fills the truck, spills on the ground; a full truck spills beside it', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    machines.splice(machines.indexOf(dozer), 1); piles.splice(1); // the bulldozer would flatten the new piles while we look
+    setMode('car'); Object.assign(car, { x: digger.x, z: digger.z }); boardMachine(digger);
+    const big = piles[0], loose = () => piles.filter(p => !p.refill).reduce((n, p) => n + p.amount, 0); // the big pile also fills up by itself
+    Object.assign(digger, { a: site.a, load: 0, act: null }); truck.load = 0;
+    machineAction(digger); step(.5); out.pose = diggerPose(digger).join() !== [.9, -2, -.9].join(); // the arm moves
+    step(1.7); out.scoop = [digger.load, big.amount];
+    digger.a = site.a + Math.PI / 2; // towards the truck waiting at the loading spot
+    machineAction(digger); step(2); out.loaded = [digger.load, truck.load];
+    digger.a = site.a + Math.PI; digger.load = 1; const n = piles.length; // towards the gate, nothing there
+    machineAction(digger); step(2); out.ground = [digger.load, piles.length - n, loose()];
+    digger.a = site.a + Math.PI / 2; digger.load = 1; truck.load = 4; const m2 = piles.length, total = loose();
+    machineAction(digger); step(2); out.full = [truck.load, loose() - total, piles.length - m2 >= 0];
+    digger.a = site.a; piles.splice(1); digger.load = 0; // no pile in front of the arm: digging air
+    Object.assign(digger, { x: site.world(0, 15)[0], z: site.world(0, 15)[1] });
+    machineAction(digger); step(2.2);
+    out.air = digger.load; piles.splice(1);
+    machineAction(digger); machineAction(digger); out.once = digger.act && digger.act.kind; // a second press while busy changes nothing
+    return out;
+  }, STEP);
+  expect(r).toEqual({ pose: true, scoop: [1, 39], loaded: [0, 1], ground: [0, 1, 1], full: [4, 1, true], air: 0, once: 'scoop' });
+});
+
+test('dump truck: tips the load out behind as a pile and the bed comes back down; empty it tips nothing', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    piles.splice(0); setMode('car'); Object.assign(car, { x: truck.x, z: truck.z }); boardMachine(truck);
+    const [x, z] = site.world(0, 14); Object.assign(truck, { x, z, a: site.a, load: 4, act: null, v: 0 });
+    const [bx, bz] = [x - Math.sin(truck.a) * 6.6, z - Math.cos(truck.a) * 6.6];
+    machineAction(truck); step(1.3); out.up = bedAngle(truck) > .7;
+    step(1.5); out.tipped = [truck.load, piles.length, piles[0] && Math.round(piles[0].amount), piles[0] && Math.hypot(piles[0].x - bx, piles[0].z - bz) < 1];
+    out.down = [bedAngle(truck), truck.act];
+    machineAction(truck); step(3); out.empty = [truck.load, piles.length];
+    return out;
+  }, STEP);
+  expect(r).toEqual({ up: true, tipped: [0, 1, 4, true], down: [0, null], empty: [0, 1] });
+});
+
+test('bulldozer: blade down pushes a pile along and flattens it; blade up drives over it', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    piles.splice(0); setMode('car'); Object.assign(car, { x: dozer.x, z: dozer.z }); boardMachine(dozer);
+    const [x, z] = site.world(-5, -5); Object.assign(dozer, { x, z, a: site.a, v: 0, blade: 0, bladeT: 0 });
+    const ahead = d => [x + Math.sin(site.a) * d, z + Math.cos(site.a) * d];
+    addDirt(...ahead(6), 20); const big = piles[0], y0 = pileH(big);
+    keys.add('ArrowUp'); step(1.5); out.bladeUp = [big.spread, Math.round(Math.hypot(big.x - ahead(6)[0], big.z - ahead(6)[1]))]; // driven over, not pushed
+    keys.clear(); step(2); Object.assign(dozer, { x, z, v: 0 });
+    machineAction(dozer); step(1); out.bladeDown = dozer.blade > .6; // Space lowers it
+    Object.assign(big, { x: ahead(6)[0], z: ahead(6)[1], spread: 1 });
+    keys.add('ArrowUp'); step(3); keys.clear();
+    out.pushed = [big.spread > 1.5, pileH(big) < y0, Math.hypot(big.x - ahead(6)[0], big.z - ahead(6)[1]) > 3, piles.length];
+    machineAction(dozer); step(1); out.bladeUpAgain = dozer.blade < .4;
+    piles.splice(0); addDirt(...ahead(8), 3); Object.assign(dozer, { x, z, a: site.a, v: 0, bladeT: 1, blade: 1 }); keys.add('ArrowUp');
+    out.small = step(8, () => piles.length === 0) < 8; keys.clear(); // a small pile ends up flat and gone
+    return out;
+  }, STEP);
+  expect(r).toEqual({ bladeUp: [1, 0], bladeDown: true, pushed: [true, true, true, 1], bladeUpAgain: true, small: true });
+});
+
+test('crane: swings, picks up a block, stacks blocks, never onto a machine, a full stack puts the block beside it', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('car'); Object.assign(car, { x: crane.x, z: crane.z - 9 }); boardMachine(crane);
+    const aim = (x, z) => { crane.a = Math.atan2(x - crane.x, z - crane.z); crane.reach = Math.hypot(x - crane.x, z - crane.z); };
+    const b0 = blocks[0], b1 = blocks[1], [sx, sz] = STACK;
+    aim(b0.x, b0.z); machineAction(crane); step(1); out.lowering = crane.hy < HOOKUP;
+    step(2); out.held = [crane.held === b0, b0.held, Math.abs(b0.y - (crane.hy - 3.2)) < .01, crane.hy];
+    aim(sx, sz); step(.1); out.carried = Math.hypot(b0.x - sx, b0.z - sz) < .1;
+    machineAction(crane); step(3); out.stacked = [crane.held, b0.held, Math.round(b0.y)];
+    aim(b1.x, b1.z); machineAction(crane); step(3); aim(sx, sz); machineAction(crane); step(3);
+    out.second = [Math.round(b1.y), Math.hypot(b1.x - b0.x, b1.z - b0.z) < .1];
+    // over a machine the block stays in the hook
+    aim(b0.x + 1, b0.z); blocks[2].x = 0; // (leave the others alone)
+    const b2 = blocks[2]; Object.assign(b2, { x: dozer.x, z: dozer.z + 0 }); // park a block on the dozer's spot to grab, then try to put it down on the truck
+    Object.assign(b2, { x: blocks[3].x + 6, z: blocks[3].z, y: 0 }); aim(b2.x, b2.z); machineAction(crane); step(3);
+    aim(truck.x, truck.z); machineAction(crane); step(3); out.refused = [crane.held === b2, b2.held];
+    aim(sx + 8, sz); machineAction(crane); step(3); out.freed = [crane.held, Math.round(b2.y)];
+    // a stack eight high: the next block goes down beside it
+    blocks.forEach((b, i) => Object.assign(b, { held: false, x: sx + 20, z: sz + 5 * (i % 2), y: 0 })); crane.held = null;
+    for (let i = 0; i < 8; i++) Object.assign(blocks[i], { x: sx, z: sz, y: i * 2 });
+    Object.assign(blocks[8], { held: true }); crane.held = blocks[8]; aim(sx, sz); crane.hy = HOOKUP;
+    machineAction(crane); step(3);
+    out.beside = [crane.held, Math.hypot(blocks[8].x - sx, blocks[8].z - sz) > 2, blocks[8].y, Math.max(...blocks.map(b => b.y))];
+    // arrows swing the arm and move the hook, within its range
+    crane.act = null; const a0 = crane.a, r0 = crane.reach;
+    keys.add('ArrowLeft'); keys.add('ArrowUp'); step(1); keys.clear(); out.moved = [crane.a > a0, crane.reach > r0];
+    keys.add('ArrowDown'); step(10); keys.clear(); out.min = crane.reach;
+    keys.add('ArrowUp'); step(10); keys.clear(); out.max = crane.reach;
+    return out;
+  }, STEP);
+  expect(r).toMatchObject({
+    lowering: true, held: [true, true, true, 20], carried: true, stacked: [null, false, 0], second: [2, true],
+    refused: [true, true], freed: [null, 0], beside: [null, true, 0, 14], moved: [true, true], min: 5, max: 24,
+  });
+});
+
+test('machines on their own: the digger loads the truck, the truck tips, the dozer flattens it, the crane builds a tower', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    const [gx, gz] = site.world(0, -40); setMode('car'); Object.assign(car, { x: gx, z: gz }); // the car stays out of the way
+    out.loaded = step(120, () => truck.phase === 'go');
+    out.leaves = step(60, () => truck.phase === 'back');
+    step(8); out.tipped = piles.some(p => !p.refill && p.amount >= 3);
+    out.flat = step(120, () => !piles.some(p => !p.refill)); // the dozer pushes every small pile flat and gone
+    out.big = piles.find(p => p.refill).amount;
+    out.tower = step(400, () => crane.dir === 'clear');
+    out.stacked = blocks.filter(b => b.y > 0).length;
+    out.dozerMoved = Math.hypot(dozer.x - dozer.home.x, dozer.z - dozer.home.z) > 1 || dozer.leg === 1;
+    out.inside = machines.every(m => inYard(m.x, m.z, 2));
+    return out;
+  }, STEP);
+  expect(r.loaded).toBeLessThan(120);
+  expect(r.leaves).toBeLessThan(60);
+  expect(r.tipped).toBe(true);
+  expect(r.flat).toBeLessThan(120);
+  expect(r.big).toBeGreaterThan(4);
+  expect(r.tower).toBeLessThan(400);
+  expect(r.stacked).toBeGreaterThanOrEqual(7);
+  expect(r.inside).toBe(true);
+});
+
+test('machines on their own stop for the car and wait; they stay inside the yard; going back to a job from anywhere', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    piles.splice(1); setMode('car');
+    // the truck is on its way to the tipping spot with the car parked in front of it
+    Object.assign(truck, { phase: 'go', load: 4, v: 0 });
+    const [px, pz] = site.world(-10, 3); Object.assign(truck, { x: px, z: pz, a: Math.atan2(TIPSPOT[0] - px, TIPSPOT[1] - pz) });
+    Object.assign(car, { x: px + Math.sin(truck.a) * 8, z: pz + Math.cos(truck.a) * 8, v: 0 });
+    step(6); out.waits = [Math.hypot(truck.x - car.x, truck.z - car.z) > 4, truck.blocked > 0, Math.abs(truck.v) < 1];
+    Object.assign(car, { x: site.world(0, -40)[0], z: site.world(0, -40)[1] });
+    step(12); out.goes = Math.hypot(truck.x - px, truck.z - pz) > 8 || truck.phase === 'back';
+    // a digger left far off with a full bucket drives back towards its spot, and goes to work as soon as the big pile is in reach
+    Object.assign(digger, { x: site.world(10, 20)[0], z: site.world(10, 20)[1], load: 1, act: null });
+    const far = Math.hypot(digger.x - digger.home.x, digger.z - digger.home.z);
+    out.home = step(60, () => digger.act) < 60 && Math.hypot(digger.x - digger.home.x, digger.z - digger.home.z) < far - 10;
+    // driving a machine into the fence stops at the fence
+    boardMachine(crane); leaveMachine(); boardMachine(dozer);
+    Object.assign(dozer, { x: site.world(0, 0)[0], z: site.world(0, 0)[1], a: site.a + Math.PI / 2, v: 0 });
+    keys.add('ArrowUp'); step(12); keys.clear();
+    out.fence = [inYard(dozer.x, dozer.z, 3), inYard(dozer.x, dozer.z, 6) === false];
+    return out;
+  }, STEP);
+  expect(r).toMatchObject({ waits: [true, true, true], goes: true, home: true, fence: [true, true] });
+});
+
+test('machines catch no stars, and the drive-around still works with sound', async ({ page }) => {
+  const problems = await open(page);
+  await page.keyboard.press('KeyX'); // start, which also starts the sound
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('car'); Object.assign(car, { x: dozer.x + 6, z: dozer.z }); boardMachine(dozer);
+    Object.assign(stars[0], { x: dozer.x, z: dozer.z, y: 2.2, sky: false });
+    const s0 = score; step(1); out.score = score - s0;
+    // backing up beeps, and the machine you are in is heard loudest
+    const heard = [], realTone = tone;
+    tone = (f, ...a) => { heard.push(f); realTone(f, ...a); };
+    Object.assign(dozer, { v: -3, beepT: 0 }); keys.add('ArrowDown'); step(1); keys.clear();
+    tone = realTone;
+    out.beeps = heard.filter(f => f === 1100).length;
+    setMode('car'); Object.assign(car, { x: digger.x, z: digger.z });
+    out.loud = [siteVol(digger) > 0, siteVol(crane) > 0];
+    Object.assign(car, { x: site.world(0, -90)[0], z: site.world(0, -90)[1] });
+    out.far = machines.map(siteVol);
+    out.hum = siteGain instanceof GainNode;
+    return out;
+  }, STEP);
+  expect(r.score).toBe(0);
+  expect(r.beeps).toBeGreaterThan(0);
+  expect(r.loud[0]).toBe(true);
+  expect(r.far).toEqual([0, 0, 0, 0]);
+  expect(r.hum).toBe(true);
+  expect(problems).toEqual([]);
+});
+
+test('with the keyboard: climb into each machine, work it, and everything draws without errors', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX'); // start
+  await page.evaluate(() => { const [x, z] = site.world(-12, 0); Object.assign(car, { x, z, a: site.a }); });
+  for (const kind of ['digger', 'truck', 'dozer', 'crane']) {
+    await page.evaluate(k => {
+      const m = machines.find(o => o.kind === k), edge = (o, x, z) => Math.hypot(o.x - x, o.z - z) - o.r;
+      setMode('car');
+      for (let i = 0; i < 40; i++) { // beside this machine, nearer to it than to any other
+        const x = m.x + Math.cos(i * .3) * (m.r + 2.8), z = m.z + Math.sin(i * .3) * (m.r + 2.8);
+        if (!hits(x, z) && machines.every(o => o === m || edge(o, x, z) > edge(m, x, z))) { Object.assign(car, { x, z }); break; }
+      }
+    }, kind);
+    await page.keyboard.press('KeyH');
+    await page.waitForFunction(k => mode === k, kind, { timeout: 40_000 });
+    const blade = await page.evaluate(() => dozer.bladeT); // the bulldozer may already have its blade down, pushing a pile
+    await page.keyboard.down('ArrowUp'); await page.keyboard.down('ArrowLeft'); await page.keyboard.press('Space');
+    await page.waitForFunction(([k, b]) => { const m = machines.find(o => o.kind === k); return k === 'dozer' ? m.bladeT !== b : !!m.act; }, [kind, blade], { timeout: 40_000 });
+    await page.keyboard.up('ArrowLeft'); await page.keyboard.up('ArrowUp');
+    const shot = await page.locator('canvas').screenshot();
+    expect(shot.length).toBeGreaterThan(5_000);
+    await page.keyboard.press('KeyH');
+    await page.waitForFunction(() => mode === 'car', null, { timeout: 40_000 });
+  }
+  expect(await glError(page)).toBe(0);
   expect(problems).toEqual([]);
 });

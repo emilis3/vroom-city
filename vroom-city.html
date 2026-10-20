@@ -616,11 +616,38 @@ function inStation(x, z) {
   const [lx, lz] = station.local(x, z);
   return (Math.abs(lx) < PADH && Math.abs(lz) < PADH) || Math.hypot(x - station.hx, z - station.hz) < HELIR + 1;
 }
+// ---------- Construction site, out in the countryside at the end of a dirt track from a town road ----------
+// Its spot is worked out without rnd() too, so the town, mountains, lake and stars stay exactly where they were.
+const YW = 35, YD = 25, TRACK = 40, TRACKW = 8, GATEW = 12; // half the yard's width and depth, the track's length and width, the gate's width
+const site = (() => {
+  let best = null;
+  for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (let i = 1; i <= 6; i++) {
+    const c = i * P, edge = TRACK + YD; // yard centre: past the end of the road, plus the track
+    const x = ox ? (ox > 0 ? W + edge : -edge) : c, z = oz ? (oz > 0 ? W + edge : -edge) : c;
+    const st = { x, z, ox, oz, a: Math.atan2(ox, oz) };
+    st.local = (px, pz) => { const dx = px - x, dz = pz - z; return [dx * oz - dz * ox, dx * ox + dz * oz]; }; // across, outward
+    st.world = (lx, lz) => [x + lx * oz + lz * ox, z - lx * ox + lz * oz];
+    let clear = true;
+    for (let lx = -YW - 6; lx <= YW + 6 && clear; lx += 4) for (let lz = -YD - TRACK; lz <= YD + 6 && clear; lz += 4) {
+      const [px, pz] = st.world(lx, lz);
+      if (px < -LIM + 10 || px > W + LIM - 10 || pz < -LIM + 10 || pz > W + LIM - 10 || wet(px, pz, 10) || inStationArea(px, pz, 12) ||
+          mountains.some(m => Math.hypot(m.x - px, m.z - pz) < m.r * 1.4 + 8)) clear = false;
+    }
+    const score = Math.hypot(x - station.x, z - station.z); // as far from the rocket station as it gets
+    if (clear && (!best || score > best.score)) best = Object.assign(st, { score });
+  }
+  return best;
+})();
+// the site's whole footprint (yard, fence and track), where no trees grow
+function inSiteArea(x, z, m = 0) {
+  const [lx, lz] = site.local(x, z);
+  return Math.abs(lx) < YW + 3 + m && lz > -YD - TRACK - m && lz < YD + 3 + m;
+}
 for (let k = 0; k < 600; k++) {
   const x = -LIM + rnd() * (W + 2 * LIM), z = -LIM + rnd() * (W + 2 * LIM);
   if (townDist(x, z) > 14 && freeSpot(x, z, 3)) {
     const pine = drnd() < .5;
-    if (inStationArea(x, z, 3)) { // same numbers a tree would use, and the same room kept round it
+    if (inStationArea(x, z, 3) || inSiteArea(x, z, 3)) { // same numbers a tree would use, and the same room kept round it
       rnd(); rnd(); ghosts.push({ x0: x - .8, x1: x + .8, z0: z - .8, z1: z + .8 });
     } else tree(x, z, pine);
   }
@@ -662,6 +689,44 @@ station.firstSolid = solids.length; // the station's solids come last
   const [mx, mz] = sx(0, 0); solid(mx, mz, 7, 7, MOUNTH);
   const [tx2, tz2] = sx(tx, 0); solid(tx2, tz2, 5, 5, TH + 6);
 }
+// the site itself: a bumpy dirt track, a sandy yard inside an orange fence with a gate, a cabin and cones
+// (the machines, dirt and blocks move, so they are drawn each frame instead)
+{
+  const put = placer(site.x, site.z, site.a), TRACKC = hex(0xa0703c), RUT = hex(0x8a5d30), SANDY = hex(0xdcc58f),
+        ORANGE = hex(0xff9800), RAIL = hex(0xfafafa), SIGN = hex(0xffd600), DARK = hex(0x263238);
+  const wob = i => Math.abs(Math.sin(i * 127.1 + 311.7) * 43758.5453) % 1; // fixed pseudo-random numbers, so nothing here touches rnd() or drnd()
+  put(BOX, 0, .012, -YD - TRACK / 2 + .25, TRACKW, .024, TRACK - .5, TRACKC);
+  for (const sd of [-1, 1]) put(BOX, sd * 1.7, .03, -YD - TRACK / 2 + .25, .7, .02, TRACK - .5, RUT);
+  for (let k = 0; k < 16; k++) { // bumps along both edges of the track
+    const side = k % 2 ? 1 : -1, s = 1.4 + wob(k) * 1.2;
+    put(ICO1, side * (TRACKW / 2 + .5 + wob(k + 40) * .6), 0, -YD - TRACK + (k + .5) * TRACK / 16, s * 1.6, s * .7, s * 1.6, TRACKC);
+  }
+  put(BOX, 0, .03, 0, 2 * YW, .06, 2 * YD, SANDY); // the yard
+  for (let k = 0; k < 8; k++) put(DISC, (wob(k + 7) - .5) * 2 * (YW - 6), .065, (wob(k + 21) - .5) * 2 * (YD - 6), 9, .01, 6, RUT); // worn patches
+  // fence: two rails and a post every few steps, the gap in the middle of the near side is the gate
+  const fenceSeg = (lx0, lz0, lx1, lz1) => {
+    const cx = (lx0 + lx1) / 2, cz = (lz0 + lz1) / 2, w = Math.abs(lx1 - lx0) || .3, d = Math.abs(lz1 - lz0) || .3;
+    for (const y of [.8, 1.4]) put(BOX, cx, y, cz, w, .2, d, RAIL);
+    const n = Math.max(1, Math.round(Math.max(w, d) / 6));
+    for (let k = 0; k <= n; k++) put(BOX, lx0 + (lx1 - lx0) * k / n, .9, lz0 + (lz1 - lz0) * k / n, .4, 1.8, .4, ORANGE);
+    const [ax, az] = site.world(lx0, lz0), [bx, bz] = site.world(lx1, lz1);
+    solid((ax + bx) / 2, (az + bz) / 2, Math.abs(bx - ax) + .8, Math.abs(bz - az) + .8, 1.8);
+  };
+  fenceSeg(-YW, -YD, -GATEW / 2, -YD); fenceSeg(GATEW / 2, -YD, YW, -YD);
+  fenceSeg(-YW, YD, YW, YD); fenceSeg(-YW, -YD, -YW, YD); fenceSeg(YW, -YD, YW, YD);
+  for (const sd of [-1, 1]) put(BOX, sd * (GATEW / 2 + .2), 2.4, -YD, .6, 4.8, .6, ORANGE); // gate posts and a sign across the top
+  put(BOX, 0, 4.7, -YD, GATEW + 1, 1.4, .3, SIGN);
+  for (let k = -2; k <= 2; k++) put(BOX, k * 2.2, 4.7, -YD - .2, .9, 1.4, .1, DARK); // dark warning stripes
+  // a site cabin in the corner by the gate
+  const [cabX, cabZ] = site.world(-29, -19);
+  put(BOX, -29, 1.5, -19, 6, 3, 4, RAIL); put(BOX, -29, 3.15, -19, 6.4, .3, 4.4, hex(0x1e88e5));
+  put(BOX, -29, 1.6, -21.01, 1.2, 1.2, .06, GLASSW, 3); put(BOX, -26.8, 1.6, -21.01, 1.2, 1.2, .06, GLASSW, 3);
+  solid(cabX, cabZ, Math.abs(site.ox) ? 4.4 : 6.4, Math.abs(site.ox) ? 6.4 : 4.4, 3.3);
+  for (const [cx, cz] of [[-8, -22], [8, -22], [-6, -24], [6, -24], [30, -20], [-31, 20], [31, 20], [0, 22]]) { // traffic cones
+    put(frustumShape(.3), cx, .55, cz, .9, 1.1, .9, hex(0xff6d00));
+    put(BOX, cx, .08, cz, 1.1, .16, 1.1, hex(0xff6d00));
+  }
+}
 const CLOUD = [1.5, 1.5, 1.5];
 for (let k = 0; k < 45; k++) { // puffy clouds
   const x = -LIM + rnd() * (W + 2 * LIM), z = -LIM + rnd() * (W + 2 * LIM), y = 70 + rnd() * 25;
@@ -682,7 +747,7 @@ function groundAt(x, z, m = 0) {
 // ---------- Sounds ----------
 // Everything plays into one master volume, then a soft limiter, so lots of sounds at once never get sharply loud.
 let ac = null, muted = false, master, limiter, noiseBuf, engOscs = [], engGain, lfoDepth, roarGain;
-let rotorLfo, rotorGain, squealGain, rotorSpin = 0, lastHorn = -9, lastToot = -9;
+let rotorLfo, rotorGain, squealGain, siteGain, rotorSpin = 0, lastHorn = -9, lastToot = -9;
 function initAudio() {
   try {
     ac = new AudioContext();
@@ -716,6 +781,9 @@ function initAudio() {
     squealGain = gain(0); noise().connect(filter('bandpass', 2300, 9)).connect(squealGain).connect(master);
     // the rocket's roar: deep rumbling noise
     roarGain = gain(0); noise().connect(filter('lowpass', 420)).connect(roarGain).connect(master);
+    // the construction site's machines working on their own: a low rumble that only plays when one is near
+    siteGain = gain(0); const rumble = ac.createOscillator(); rumble.type = 'sawtooth'; rumble.frequency.value = 52;
+    rumble.connect(filter('lowpass', 260)).connect(siteGain).connect(master); rumble.start();
   } catch { ac = null; engGain = null; } // no sound on this browser; the game plays on silently
 }
 function toggleMute() {
@@ -807,7 +875,27 @@ let mode = 'car', started = false, score = 0, lastBoing = 0, T = 0, yayTimer = 0
 const fog = [120, 280];
 const stars = [], confetti = [];
 const RAINBOW = [0xff5252, 0xffd740, 0x69f0ae, 0x40c4ff, 0xe040fb, 0xff9100].map(hex);
-const me = () => ({ car, boat, heli, rocket, buggy })[mode];
+const me = () => ({ car, boat, heli, rocket, buggy, digger, truck, dozer, crane })[mode];
+
+// ---------- Construction site: the four machines, dirt piles and toy blocks ----------
+// x, z and a (the heading, or the crane's arm) are in the world; r is how much room a machine takes up.
+const spot = (lx, lz, la) => { const [x, z] = site.world(lx, lz); return { x, y: 0, z, a: site.a + la }; };
+const digger = { kind: 'digger', ...spot(-25, 0, 0), v: 0, steer: 0, spin: 0, r: 3, load: 0, act: null };
+const truck = { kind: 'truck', ...spot(-18.4, 0, 0), v: 0, steer: 0, spin: 0, r: 3.4, load: 0, act: null, phase: 'load', wait: 0 };
+const dozer = { kind: 'dozer', ...spot(0, -10, Math.PI / 2), v: 0, steer: 0, spin: 0, r: 3, blade: 0, bladeT: 0, leg: 0, jobT: 0, skip: null };
+const crane = { kind: 'crane', ...spot(25, 10, 0), v: 0, r: 3.4, reach: 10, hy: 20, held: null, act: null, dir: 'build' };
+const machines = [digger, truck, dozer, crane];
+for (const m of machines) Object.assign(m, { home: { x: m.x, z: m.z, a: m.a }, auto: false, blocked: 0, beepT: 0 });
+const MACHINE_ICON = { digger: '🚜', truck: '🚚', dozer: '🚜', crane: '🏗️' };
+const isMachine = md => md in MACHINE_ICON;
+const REACH = 6.6, MAXPILES = 12, TRUCKMAX = 4, HOOKUP = 20, STACKMAX = 8;
+const piles = [], blocks = [];
+function addPile(lx, lz, amount, refill = false) { const [x, z] = site.world(lx, lz); piles.push({ x, z, amount, spread: 1, refill, t: 0 }); }
+addPile(-25, 9.5, 40, true); addPile(-2, 6, 3); addPile(10, -6, 2); // the big pile the digger works on, and two small ones
+for (let i = 0; i < 10; i++) { // ten toy blocks in two rows next to the crane
+  const [x, z] = site.world(17 + (i % 5) * 2.6, i < 5 ? 17 : 20);
+  blocks.push({ x, z, y: 0, held: false, col: RAINBOW[i % 6] });
+}
 
 // ---------- Space: the Earth, the Moon, planets, a space station and space stars ----------
 // Space has its own coordinates, with the Earth's centre at the middle. drnd() lays it out, so the world stays put.
@@ -884,10 +972,11 @@ for (let tries = 0; ducks.length < 6 && tries < 500; tries++) {
   if (inWater(x, z, 4)) ducks.push({ x, z, hx: x, hz: z, a: rnd() * 6.283, scared: false, phase: rnd() * 6 });
 }
 
-function hits(x, z) {
-  const r = 1.7;
+function hits(x, z, r = 1.7, self = null) { // self: the machine asking, which is not in its own way
   if (x < -LIM || x > W + LIM || z < -LIM || z > W + LIM) return true;
   for (const o of solids) if (o.car && x > o.x0 - r && x < o.x1 + r && z > o.z0 - r && z < o.z1 + r) return true;
+  for (const b of blocks) if (!b.held && b.y < 1.5 && Math.abs(x - b.x) < 1 + r && Math.abs(z - b.z) < 1 + r) return true;
+  for (const m of machines) if (m !== self && Math.hypot(x - m.x, z - m.z) < m.r + r - .5) return true;
   return false;
 }
 function puff(x, y, z, n) {
@@ -905,14 +994,20 @@ const HELP = {
   rocketPad: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · H = car · M = sound',
   rocketMoon: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · M = sound',
   rocketSpace: 'Arrows = fly · W or Space = go up · S or Shift = go down · M = sound',
-  buggy: 'Arrows or WASD = drive the buggy · H = rocket · M = sound'
+  buggy: 'Arrows or WASD = drive the buggy · H = rocket · M = sound',
+  carSite: 'Arrows or WASD = drive · Space = beep beep! · H = climb in · M = sound',
+  digger: 'Arrows or WASD = drive · Space = scoop or dump · H = car · M = sound',
+  truck: 'Arrows or WASD = drive · Space = tip the load · H = car · M = sound',
+  dozer: 'Arrows or WASD = drive · Space = blade up or down · H = car · M = sound',
+  crane: 'Arrows = swing the arm and move the hook · Space = grab or let go · H = car · M = sound'
 };
 const landed = () => mode === 'rocket' && scene === 'earth' && rocket.y === 0;
 // the badge and help line follow the vehicle, and where it is
 function refreshHud() {
-  const atStation = (mode === 'car' && inStation(car.x, car.z)) || (mode === 'heli' && inStation(heli.x, heli.z));
-  const badge = { car: atStation ? 'H = 🚀' : 'H = 🚁', boat: 'H = 🚁', heli: atStation ? 'H = 🚀' : 'H = 🚗', buggy: 'H = 🚀', rocket: landed() ? 'H = 🚗' : '🚀' }[mode];
-  const help = atStation ? mode + 'Station' : mode !== 'rocket' ? mode :
+  const atStation = (mode === 'car' && inStation(car.x, car.z)) || (mode === 'heli' && inStation(heli.x, heli.z)), nm = nearMachine();
+  const badge = { car: nm ? 'H = ' + MACHINE_ICON[nm.kind] : atStation ? 'H = 🚀' : 'H = 🚁', boat: 'H = 🚁', heli: atStation ? 'H = 🚀' : 'H = 🚗', buggy: 'H = 🚀',
+    rocket: landed() ? 'H = 🚗' : '🚀', digger: 'H = 🚗', truck: 'H = 🚗', dozer: 'H = 🚗', crane: 'H = 🚗' }[mode];
+  const help = nm ? 'carSite' : atStation ? mode + 'Station' : mode !== 'rocket' ? mode :
     scene === 'space' ? 'rocketSpace' : scene === 'moon' ? 'rocketMoon' : 'rocketPad';
   const b = document.getElementById('mode'), h = document.getElementById('help');
   if (b.textContent !== badge) b.textContent = badge;
@@ -965,6 +1060,9 @@ function buggyOut() { // the buggy rolls out of the rocket
 function backInRocket() { Object.assign(rocket, { y: 0, vy: 0, thrust: 0, auto: false }); setMode('rocket'); whoosh(true); puff(buggy.x, 1, buggy.z, 15); }
 
 function switchVehicle() {
+  if (isMachine(mode)) { leaveMachine(); return; }
+  const nm = nearMachine();
+  if (nm) { boardMachine(nm); return; }
   if (mode === 'rocket') { if (landed()) leaveRocket(); return; } // nothing happens in flight
   if (mode === 'buggy') { backInRocket(); return; }
   if ((mode === 'car' && inStation(car.x, car.z)) || (mode === 'heli' && inStation(heli.x, heli.z))) { boardRocket(); return; }
@@ -1000,6 +1098,7 @@ addEventListener('keydown', e => {
   keys.add(e.code);
   if (e.code === 'Space' && mode === 'car') horn();
   if (e.code === 'Space' && mode === 'boat') toot();
+  if (e.code === 'Space' && isMachine(mode)) machineAction(me());
   if (e.code === 'KeyH' || e.code === 'Enter') switchVehicle();
   if (e.code === 'KeyM') toggleMute();
 });
@@ -1216,16 +1315,317 @@ function cheer(x, y, z) {
 
 const MUSIC = [392, 523, 659, 784, 659, 523, 587, 784, 440, 587, 698, 880, 698, 587, 523, 659];
 let musicT = 0, musicI = 0;
+// ---------- Construction site: driving, working, and the jobs the machines do by themselves ----------
+const LOAD = site.world(-18.4, 0), TIPSPOT = site.world(5, 14), STACK = site.world(25, -5), PATROL = site.world(24, -13);
+const SLOTS = Array.from({ length: 10 }, (_, i) => site.world(17 + (i % 5) * 2.6, i < 5 ? 17 : 20));
+const SPEC = { digger: { vmax: 8, turn: 1.5 }, truck: { vmax: 11, turn: 1.1 }, dozer: { vmax: 9, turn: 1.3 } }; // top speeds are about half the car's
+const ACT_TIME = { scoop: 1.8, dump: 1.6, tip: 2.6, grab: 2.2, release: 2.2 }, MAST = 24.6; // seconds each job takes; the height of the crane's arm
+const inYard = (x, z, m = 0) => { const [lx, lz] = site.local(x, z); return Math.abs(lx) < YW - m && Math.abs(lz) < YD - m; };
+const clampYard = (x, z, m = 2) => {
+  const [lx, lz] = site.local(x, z);
+  return site.world(Math.max(-YW + m, Math.min(YW - m, lx)), Math.max(-YD + m, Math.min(YD - m, lz)));
+};
+const angDiff = (a, b) => { const d = (b - a) % (2 * Math.PI); return d > Math.PI ? d - 2 * Math.PI : d < -Math.PI ? d + 2 * Math.PI : d; };
+const ease = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+const pileR = p => (1.2 + .5 * Math.sqrt(p.amount)) * Math.sqrt(p.spread);
+const pileH = p => (.5 + .35 * Math.sqrt(p.amount)) / p.spread;
+const reachPoint = (m, d = REACH) => [m.x + Math.sin(m.a) * d, m.z + Math.cos(m.a) * d]; // where a digger's bucket digs or dumps
+const hookAt = c => [c.x + Math.sin(c.a) * c.reach, c.z + Math.cos(c.a) * c.reach];
+
+// the machine you are in is loud; the others only make a little noise, and only when you are within 40 units
+function siteVol(m) {
+  if (me() === m) return 1;
+  const d = Math.hypot(m.x - me().x, m.z - me().z);
+  return d < 40 ? .35 * (1 - d / 40) : 0;
+}
+function thud(m) { const v = siteVol(m); if (v > 0) { tone(120, .2, 'sine', .14 * v, 0, 55); hiss(.12, .1 * v, 700, 200); } }
+function hydraulic(m) { const v = siteVol(m); if (v > 0) hiss(.5, .07 * v, 900, 300); }
+const seen = (x, z) => Math.hypot(x - me().x, z - me().z) < 60; // dust only where someone can see it
+function dirtPuff(x, z) {
+  if (!seen(x, z)) return;
+  for (let k = 0; k < 5; k++) dust(x + (Math.random() - .5) * 1.5, 1, z + (Math.random() - .5) * 1.5, (Math.random() - .5) * 3, (Math.random() - .5) * 3, 50, 1.2);
+}
+
+// dirt lands on the pile it falls on, or starts a new one; with twelve piles it joins the nearest
+function addDirt(x, z, n = 1) {
+  [x, z] = clampYard(x, z);
+  let near = null, nd = Infinity;
+  for (const p of piles) { const d = Math.hypot(p.x - x, p.z - z); if (d < nd) { nd = d; near = p; } }
+  if (near && (nd < pileR(near) + 2 || piles.length >= MAXPILES)) near.amount += n;
+  else piles.push({ x, z, amount: n, spread: 1, refill: false, t: 0 });
+}
+function takeDirt(p) {
+  if (p.refill) p.amount = Math.max(5, p.amount - 1); // the big pile never runs low
+  else if (--p.amount < 1) piles.splice(piles.indexOf(p), 1);
+}
+function pileAt(x, z, slack = 3) {
+  let best = null, bd = Infinity;
+  for (const p of piles) { const d = Math.hypot(p.x - x, p.z - z) - pileR(p); if (d < slack && d < bd) { bd = d; best = p; } }
+  return best;
+}
+// the highest block under the hook, and how high the stack under a spot is
+function blockUnder(x, z) {
+  let best = null;
+  for (const b of blocks) if (!b.held && Math.abs(b.x - x) < 1.5 && Math.abs(b.z - z) < 1.5 && (!best || b.y > best.y)) best = b;
+  return best;
+}
+function stackTop(x, z) {
+  let top = 0;
+  for (const b of blocks) if (!b.held && Math.abs(b.x - x) < 1.95 && Math.abs(b.z - z) < 1.95) top = Math.max(top, b.y + 2);
+  return top;
+}
+
+// one machine drives: speed up, slow down, steer (it can also turn on the spot), and stay inside the yard
+function driveMachine(m, up, down, left, right, dt, cap = 1) {
+  const S = SPEC[m.kind];
+  if (up) m.v += (m.v < 0 ? 16 : 8) * dt;
+  else if (down) m.v -= (m.v > 0 ? 16 : 6) * dt;
+  else m.v *= Math.pow(.2, dt);
+  m.v = Math.max(-4, Math.min(S.vmax * cap, m.v));
+  const target = (left ? 1 : 0) - (right ? 1 : 0);
+  m.steer = m.auto ? target : m.steer + (target - m.steer) * Math.min(1, dt * 6);
+  m.a += m.steer * S.turn * dt * Math.max(.6, Math.min(1, Math.abs(m.v) / 3)) * (m.v < -.5 ? -1 : 1);
+  m.spin += m.v * dt / 1.1;
+  const nx = m.x + Math.sin(m.a) * m.v * dt, nz = m.z + Math.cos(m.a) * m.v * dt;
+  const free = (x, z) => inYard(x, z, 3) && !hits(x, z, m.r, m);
+  let bumped = false;
+  if (free(nx, m.z)) m.x = nx; else bumped = true;
+  if (free(m.x, nz)) m.z = nz; else bumped = true;
+  if (bumped) { if (Math.abs(m.v) > 3) thud(m); m.v *= -.3; }
+}
+function driveByKid(m, dt) {
+  const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS'), left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
+  if (m.kind !== 'crane') { driveMachine(m, up, down, left, right, dt); return; }
+  if (m.act) return; // the arm waits while the hook is busy
+  m.a += ((left ? 1 : 0) - (right ? 1 : 0)) * .7 * dt;
+  m.reach = Math.max(5, Math.min(24, m.reach + ((up ? 1 : 0) - (down ? 1 : 0)) * 8 * dt));
+}
+
+// the space key: each machine's one job
+function machineAction(m) {
+  if (m.kind === 'dozer') { m.bladeT = m.bladeT ? 0 : 1; hydraulic(m); return; }
+  if (!m.act) startAct(m);
+}
+function startAct(m) {
+  const kind = m.kind === 'digger' ? (m.load ? 'dump' : 'scoop') : m.kind === 'truck' ? 'tip' : m.held ? 'release' : 'grab';
+  m.act = { kind, p: 0, done: false };
+  if (m.kind === 'crane') { // how low the hook goes: onto the block under it, or onto the top of the stack
+    const [hx, hz] = hookAt(m), b = kind === 'grab' ? blockUnder(hx, hz) : null;
+    m.act.hy = Math.min(HOOKUP - .5, kind === 'grab' ? (b ? b.y + 3.2 : 4.5) : stackTop(hx, hz) + 3.2);
+  }
+  hydraulic(m);
+}
+function actEffect(m, kind) {
+  if (kind === 'scoop') {
+    const [wx, wz] = reachPoint(m), p = pileAt(wx, wz);
+    if (p) { takeDirt(p); m.load = 1; } // digging air fills nothing
+    dirtPuff(wx, wz); thud(m);
+  } else if (kind === 'dump') {
+    const [wx, wz] = reachPoint(m), near = Math.hypot(truck.x - wx, truck.z - wz) < 4.5;
+    m.load = 0;
+    if (near && truck.load < TRUCKMAX) truck.load++;
+    else if (near) addDirt(wx + Math.sin(m.a) * 3.5, wz + Math.cos(m.a) * 3.5); // a full truck spills beside it
+    else addDirt(wx, wz);
+    dirtPuff(wx, wz); thud(m);
+  } else if (kind === 'tip') {
+    const n = m.load, bx = m.x - Math.sin(m.a) * 6.6, bz = m.z - Math.cos(m.a) * 6.6;
+    m.load = 0;
+    if (n) { addDirt(bx, bz, n); dirtPuff(bx, bz); }
+    thud(m);
+  } else if (kind === 'grab') {
+    const [hx, hz] = hookAt(m), b = blockUnder(hx, hz);
+    if (b) { b.held = true; m.held = b; thud(m); }
+  } else releaseBlock(m);
+}
+function releaseBlock(c) {
+  const b = c.held;
+  if (!b) return;
+  const [hx, hz] = hookAt(c);
+  // never onto a machine or the car
+  if (machines.some(o => Math.hypot(o.x - hx, o.z - hz) < o.r + 1.2) || (mode === 'car' && Math.hypot(car.x - hx, car.z - hz) < 3.8)) {
+    tone(150, .15, 'square', .05, 0, 100); return;
+  }
+  Object.assign(b, { x: hx, z: hz, y: 0 });
+  for (const [dx, dz] of [[0, 0], [2.4, 0], [-2.4, 0], [0, 2.4], [0, -2.4]]) { // a full stack puts the block down beside it
+    const t = stackTop(hx + dx, hz + dz);
+    if (t <= (STACKMAX - 1) * 2) { Object.assign(b, { x: hx + dx, z: hz + dz, y: t }); break; }
+  }
+  b.held = false; c.held = null; thud(c);
+}
+function updateAct(m, dt) {
+  const a = m.act;
+  if (!a) return;
+  a.p += dt / ACT_TIME[a.kind];
+  if (!a.done && a.p >= .5) { a.done = true; actEffect(m, a.kind); }
+  if (a.p >= 1) m.act = null;
+}
+function craneHeight(c) {
+  const a = c.act;
+  if (!a) return HOOKUP;
+  return a.p < .5 ? HOOKUP + (a.hy - HOOKUP) * ease(a.p / .45) : a.hy + (HOOKUP - a.hy) * ease((a.p - .55) / .45);
+}
+
+// ---- jobs when nobody is in the machine ----
+function blockedAhead(m) { // the car or another machine in the way
+  const x = m.x + Math.sin(m.a) * 4.5, z = m.z + Math.cos(m.a) * 4.5;
+  return (mode === 'car' && Math.hypot(car.x - x, car.z - z) < 6) || machines.some(o => o !== m && Math.hypot(o.x - x, o.z - z) < o.r + 1.5);
+}
+// drive towards a spot; true once there (or once it has been stuck behind something for 10 s, to move on to the next job)
+function goTo(m, tx, tz, dt, tol = 2.5) {
+  if (Math.hypot(tx - m.x, tz - m.z) < tol) { m.blocked = 0; driveMachine(m, false, false, false, false, dt); return true; }
+  const df = angDiff(m.a, Math.atan2(tx - m.x, tz - m.z)), stop = blockedAhead(m);
+  m.blocked = stop ? m.blocked + dt : 0;
+  if (m.blocked > 10) { m.blocked = 0; return true; }
+  driveMachine(m, !stop && Math.abs(df) < .9, false, df > .05, df < -.05, dt, .6);
+  return false;
+}
+function faceTo(m, tx, tz, dt) {
+  const df = angDiff(m.a, Math.atan2(tx - m.x, tz - m.z));
+  driveMachine(m, false, false, df > .05, df < -.05, dt, .6);
+  return Math.abs(df) <= .06;
+}
+function autoDigger(d, dt) {
+  if (d.act) { driveMachine(d, false, false, false, false, dt); return; }
+  let pile = null;
+  for (const p of piles) if (Math.hypot(p.x - d.x, p.z - d.z) < 14 && (!pile || p.amount > pile.amount)) pile = p;
+  if (!pile) { goTo(d, d.home.x, d.home.z, dt, 1); return; }
+  let aim = pile;
+  if (d.load && Math.hypot(truck.x - d.x, truck.z - d.z) < 12 && truck.load < TRUCKMAX && Math.abs(truck.v) < .5) aim = truck; // loads the truck when it waits
+  if (faceTo(d, aim.x, aim.z, dt)) startAct(d);
+}
+function autoTruck(t, dt) {
+  if (t.act) { driveMachine(t, false, false, false, false, dt); return; }
+  if (t.phase === 'load') {
+    if (goTo(t, LOAD[0], LOAD[1], dt, 2)) {
+      t.wait += dt;
+      if (t.load >= TRUCKMAX || (t.load && t.wait > 25)) { t.phase = 'go'; t.wait = 0; }
+    }
+  } else if (t.phase === 'go') {
+    if (goTo(t, TIPSPOT[0], TIPSPOT[1], dt, 2.5) && Math.abs(t.v) < 1) { startAct(t); t.phase = 'back'; }
+  } else if (goTo(t, LOAD[0], LOAD[1], dt, 2)) { t.phase = 'load'; t.wait = 0; }
+}
+function autoDozer(z, dt) {
+  let small = null, sd = Infinity;
+  for (const p of piles) { // small piles get pushed flat
+    if (p.refill || p.amount > 6 || !inYard(p.x, p.z, 2) || (z.skip && z.skip.p === p && T < z.skip.until)) continue;
+    const d = Math.hypot(p.x - z.x, p.z - z.z);
+    if (d < sd) { sd = d; small = p; }
+  }
+  if (z.target !== small) { z.target = small; z.jobT = 0; }
+  if (small) {
+    z.bladeT = 1; z.jobT += dt;
+    if (z.jobT > 25) { z.skip = { p: small, until: T + 40 }; z.jobT = 0; }
+    goTo(z, small.x, small.z, dt, .5);
+  } else { // nothing to push: drive slowly back and forth
+    z.bladeT = 0;
+    const [tx, tz] = z.leg ? PATROL : [z.home.x, z.home.z];
+    if (goTo(z, tx, tz, dt, 2.5)) z.leg ^= 1;
+  }
+}
+// swing the arm and move the hook towards a spot; true once it is right above it
+function aimCrane(c, tx, tz, dt) {
+  const da = angDiff(c.a, Math.atan2(tx - c.x, tz - c.z)), want = Math.max(5, Math.min(24, Math.hypot(tx - c.x, tz - c.z))), dr = want - c.reach;
+  c.a += Math.max(-.6 * dt, Math.min(.6 * dt, da));
+  c.reach += Math.max(-6 * dt, Math.min(6 * dt, dr));
+  return Math.abs(da) < .02 && Math.abs(dr) < .2;
+}
+const isTop = b => !blocks.some(o => o !== b && !o.held && o.y > b.y && Math.abs(o.x - b.x) < 2 && Math.abs(o.z - b.z) < 2);
+const reachable = (c, b) => { const d = Math.hypot(b.x - c.x, b.z - c.z); return d > 5 && d < 24; };
+function autoCrane(c, dt) {
+  if (c.act) return;
+  const near = (x, z) => Math.hypot(x - STACK[0], z - STACK[1]) < 3;
+  if (c.held) { // build the tower; once all blocks are in it, put them back in their row
+    let target = STACK;
+    if (c.dir === 'clear') target = SLOTS.find(s => !blocks.some(b => Math.hypot(b.x - s[0], b.z - s[1]) < 2.3)) || STACK;
+    if (aimCrane(c, target[0], target[1], dt)) startAct(c);
+    return;
+  }
+  let pick = null, pd = Infinity;
+  for (const b of blocks) {
+    if (b.held || !isTop(b) || !reachable(c, b) || near(b.x, b.z) !== (c.dir === 'clear')) continue;
+    const d = Math.hypot(b.x - c.x, b.z - c.z) - (c.dir === 'clear' ? b.y * 10 : 0);
+    if (d < pd) { pd = d; pick = b; }
+  }
+  if (!pick) { c.dir = c.dir === 'build' ? 'clear' : 'build'; return; }
+  if (aimCrane(c, pick.x, pick.z, dt)) startAct(c);
+}
+function pushPiles(z, dt) { // the blade pushes dirt along and spreads it flat
+  z.blade += (z.bladeT - z.blade) * Math.min(1, dt * 4);
+  if (z.blade < .6) return;
+  const fx0 = z.x + Math.sin(z.a) * 3.3, fz0 = z.z + Math.cos(z.a) * 3.3;
+  for (let i = piles.length - 1; i >= 0; i--) {
+    const p = piles[i];
+    if (Math.hypot(p.x - fx0, p.z - fz0) > pileR(p) + 1.2) continue;
+    if (z.v > .3) [p.x, p.z] = clampYard(p.x + Math.sin(z.a) * z.v * dt, p.z + Math.cos(z.a) * z.v * dt);
+    p.spread = Math.min(3, p.spread + dt * .25 * Math.max(1, Math.abs(z.v)));
+    if (Math.random() < dt * 6) dirtPuff(p.x, p.z);
+    if (!p.refill && p.amount <= 6 && p.spread > 2.2) { piles.splice(i, 1); thud(z); }
+  }
+}
+function updateSite(dt) {
+  for (const m of machines) {
+    m.auto = m.kind !== mode;
+    if (!m.auto) driveByKid(m, dt);
+    else if (m.kind === 'digger') autoDigger(m, dt);
+    else if (m.kind === 'truck') autoTruck(m, dt);
+    else if (m.kind === 'dozer') autoDozer(m, dt);
+    else autoCrane(m, dt);
+    updateAct(m, dt);
+    if (m.kind === 'dozer') pushPiles(m, dt);
+    if (m.kind === 'crane') {
+      m.hy = craneHeight(m);
+      if (m.held) { [m.held.x, m.held.z] = hookAt(m); m.held.y = m.hy - 3.2; }
+    } else {
+      if (Math.abs(m.v) > 3 && Math.random() < dt * 8 && seen(m.x, m.z)) dust(m.x - Math.sin(m.a) * 2.5, .4, m.z - Math.cos(m.a) * 2.5, (Math.random() - .5) * 2, (Math.random() - .5) * 2);
+      if (m.v < -.5 && (m.beepT -= dt) <= 0) { m.beepT = .7; const v = siteVol(m); if (v > 0) tone(1100, .12, 'square', .03 * v); } // beep beep when backing up
+    }
+  }
+  for (const p of piles) if (p.refill) { // the big pile fills up again, one load every 5 s
+    if (p.spread > 1) p.spread = Math.max(1, p.spread - dt * .03);
+    if (p.amount < 40 && (p.t += dt) >= 5) { p.t -= 5; p.amount++; }
+    if (p.amount >= 40) p.t = 0;
+  }
+  if (siteGain) { // the rumble of the machines working by themselves
+    let level = 0;
+    for (const m of machines) if (m.auto && (Math.abs(m.v) > .3 || m.act)) level += siteVol(m);
+    siteGain.gain.setTargetAtTime(Math.min(.06, level * .12), ac.currentTime, .2);
+  }
+}
+// climbing in and out
+function nearMachine() { // the machine within about 6 units of the car's side
+  if (mode !== 'car') return null;
+  let best = null, bd = 6;
+  for (const m of machines) { const d = Math.hypot(m.x - car.x, m.z - car.z) - m.r; if (d < bd) { bd = d; best = m; } }
+  return best;
+}
+function boardMachine(m) {
+  Object.assign(m, { v: 0, steer: 0 });
+  setMode(m.kind); tone(220, .15, 'square', .05, 0, 150); puff(m.x, 2, m.z, 12);
+}
+function leaveMachine() { // the car appears next to the machine, on free ground inside the yard
+  const m = me();
+  let spot = null;
+  for (let r = m.r + 3; !spot && r < 40; r += 2)
+    for (let k = 0; k < 16 && !spot; k++) {
+      const x = m.x + Math.cos(k / 16 * 6.283 + m.a) * r, z = m.z + Math.sin(k / 16 * 6.283 + m.a) * r;
+      if (inYard(x, z, 2.5) && !hits(x, z)) spot = { x, z };
+    }
+  Object.assign(car, spot || { x: m.x, z: m.z }, { a: m.a, v: 0, steer: 0 });
+  m.v = 0; setMode('car'); tone(180, .15, 'square', .05, 0, 120); puff(car.x, 1, car.z, 12);
+}
+
 function update(dt) {
   if (scene === 'space') flySpace(dt);
   else if (scene === 'moon') { if (mode === 'buggy') driveBuggy(dt); else flyRocketMoon(dt); }
   else if (mode === 'rocket') flyRocketEarth(dt);
-  else if (mode === 'car') driveCar(dt); else if (mode === 'boat') driveBoat(dt); else flyHeli(dt);
+  else if (mode === 'car') driveCar(dt); else if (mode === 'boat') driveBoat(dt); else if (mode === 'heli') flyHeli(dt);
+  if (scene === 'earth') updateSite(dt);
   updateDucks(dt);
   refreshHud();
 
   const v = me(), vy = v.y + 1.5;
-  for (let i = 0; i < stars.length && scene === 'earth' && mode !== 'rocket'; i++) {
+  for (let i = 0; i < stars.length && scene === 'earth' && mode !== 'rocket' && !isMachine(mode); i++) { // machines can't catch stars
     const s = stars[i], sy = s.y + Math.sin(T * 3 + s.phase) * .5;
     if (s.water && mode !== 'boat') continue;
     if (Math.hypot(s.x - v.x, s.z - v.z) < (mode === 'heli' ? 5 : 3.5) && Math.abs(sy - vy) < 4.5) {
@@ -1245,10 +1645,10 @@ function update(dt) {
   rotorSpin = spinRotor(rotorSpin, mode === 'heli', dt);
   if (engGain) {
     const t = ac.currentTime, h = mode === 'heli', b = mode === 'boat', bv = Math.abs(boat.v);
-    const r = mode === 'rocket', g = mode === 'buggy', th = rocket.thrust, sp = scene === 'space';
-    engGain.gain.setTargetAtTime(r ? (sp ? .015 + th * .015 : .02 + th * .05) : g ? .02 + Math.abs(buggy.v) * .002 :
+    const r = mode === 'rocket', g = mode === 'buggy', th = rocket.thrust, sp = scene === 'space', mc = isMachine(mode), mv = mc ? Math.abs(me().v) : 0;
+    engGain.gain.setTargetAtTime(mc ? .03 + mv * .003 + (me().act ? .01 : 0) : r ? (sp ? .015 + th * .015 : .02 + th * .05) : g ? .02 + Math.abs(buggy.v) * .002 :
       h ? .02 : b ? .03 + bv * .0025 : .025 + Math.abs(car.v) * .002, t, .1);
-    const hz = r ? (sp ? 55 : 38 + th * 25) : g ? 60 + Math.abs(buggy.v) * 4 :
+    const hz = mc ? 38 + mv * 4 : r ? (sp ? 55 : 38 + th * 25) : g ? 60 + Math.abs(buggy.v) * 4 :
       h ? 60 + Math.abs(heli.v) * 1.5 : b ? 38 + bv * 4.5 : 45 + Math.abs(car.v) * 5;
     engOscs.forEach((o, i) => o.frequency.setTargetAtTime(i === 2 ? hz / 2 : hz, t, .1));
     lfoDepth.gain.setTargetAtTime(r ? .25 : g ? .5 : b ? .35 : 0, t, .1); // the boat's motor burbles a little
@@ -1471,6 +1871,68 @@ const stationMesh = build(o => {
   o(BOX, 3.4, 3.42, 2.38, .5, .32, .1, VISOR, 3);
 });
 const waveArm = build(o => o(bevelShape(.25, 1, .25, .08), 0, .5, 0, 1, 1, 1, SUIT));
+
+// the construction site's machines, all blocky and bright; the moving parts are separate meshes that turn at their joints
+const MYEL = hex(0xffc400), MYELD = hex(0xe0a000), MORANGE = hex(0xff7a00), DIRTC = hex(0x9a6b3a), MGREY = hex(0x37474f);
+const diggerBody = build(o => {
+  for (const sx of [-1, 1]) { o(bevelShape(1.0, 1.1, 4.4, .2), sx * 1.45, .6, 0, 1, 1, 1, TYRE); o(BOX, sx * 1.45, 1.17, 0, 1.0, .08, 3.2, HELIDARK); }
+  o(bevelShape(3.2, .7, 3.8, .15), 0, 1.5, 0, 1, 1, 1, MYELD); // body
+  o(bevelShape(2.1, 1.7, 2.0, .25), .55, 2.7, -.6, 1, 1, 1, MYEL); // cab
+  o(BOX, .55, 2.9, .42, 1.8, 1.0, .06, GLASS, 3);
+  o(bevelShape(2.4, 1.0, 1.5, .2), -.2, 2.3, -1.4, 1, 1, 1, MYELD); // engine hood
+  o(prismShape(8), -.9, 3.2, -1.7, .3, .9, .3, HELIDARK); // exhaust
+});
+const diggerBoom = build(o => o(BOX, 0, 0, 2.3, .6, .75, 4.6, MYEL));
+const diggerArm = build(o => o(BOX, 0, 0, 1.8, .45, .55, 3.6, MYELD));
+const diggerBucket = build(o => {
+  o(bevelShape(1.6, .9, 1.3, .2), 0, -.35, .5, 1, 1, 1, STEELDARK);
+  for (const sx of [-.6, 0, .6]) o(BOX, sx, -.8, 1.15, .22, .3, .25, STEEL); // teeth
+});
+const truckBody = build(o => {
+  o(bevelShape(2.9, .7, 9.2, .15), 0, 1.45, 0, 1, 1, 1, MGREY); // chassis
+  o(bevelShape(2.8, 2.3, 2.1, .3), 0, 3.0, 3.5, 1, 1, 1, MORANGE); // cab
+  o(BOX, 0, 3.3, 4.57, 2.3, 1.1, .06, GLASS, 3);
+  o(BOX, 0, 2.0, 4.62, 2.4, .5, .1, HELIDARK);
+  for (const sx of [-1, 1]) o(LENS, sx * .95, 1.75, 4.64, .5, .5, .1, LIGHT, 3);
+  o(prismShape(8), 1.2, 4.6, 2.7, .25, 1.6, .25, HELIDARK); // exhaust stack
+});
+const truckBed = build(o => { // turns at the hinge at the back
+  o(BOX, 0, .15, 3.3, 3.0, .3, 6.6, MORANGE);
+  for (const sx of [-1, 1]) o(BOX, sx * 1.4, .85, 3.3, .2, 1.3, 6.6, MORANGE);
+  o(BOX, 0, .85, .1, 3.0, 1.3, .2, MORANGE);
+  o(BOX, 0, 1.0, 6.5, 3.0, 1.7, .25, MORANGE);
+});
+const dozerBody = build(o => {
+  for (const sx of [-1, 1]) {
+    o(bevelShape(1.1, 1.5, 5.4, .3), sx * 1.6, .8, 0, 1, 1, 1, TYRE);
+    for (let k = 0; k < 5; k++) o(BOX, sx * 1.6, 1.58, -2.2 + k * 1.1, 1.2, .1, .35, HELIDARK); // track plates
+  }
+  o(bevelShape(3.0, 1.2, 4.2, .2), 0, 2.1, -.2, 1, 1, 1, MYEL); // body
+  o(bevelShape(2.2, 1.7, 2.0, .25), 0, 3.5, -.9, 1, 1, 1, MYEL); // cab
+  o(BOX, 0, 3.7, .12, 1.9, 1.0, .06, GLASS, 3);
+  o(bevelShape(2.0, 1.0, 1.8, .2), 0, 2.6, 1.5, 1, 1, 1, MYELD); // hood
+  o(prismShape(8), .7, 3.6, 1.8, .3, 1.3, .3, HELIDARK); // exhaust pipe
+});
+const dozerBlade = build(o => { // turns up and down at its hinge
+  o(bevelShape(4.6, 1.6, .4, .12), 0, 0, 0, 1, 1, 1, MYELD);
+  for (const sx of [-1, 1]) o(BOX, sx * 1.9, .3, -1.4, .35, .4, 2.8, MYEL); // arms back to the body
+});
+const craneTower = build(o => {
+  o(bevelShape(5.6, 1.0, 5.6, .2), 0, .5, 0, 1, 1, 1, hex(0x546e7a));
+  for (const cx of [-1, 1]) for (const cz of [-1, 1]) o(BOX, cx * 1.1, 12.8, cz * 1.1, .45, 23.6, .45, MYEL); // mast legs
+  for (let y = 2; y < 24; y += 2.5) for (const sd of [-1.1, 1.1]) { o(BOX, 0, y, sd, 2.2, .25, .25, MYEL); o(BOX, sd, y, 0, .25, .25, 2.2, MYEL); }
+  o(prismShape(12), 0, MAST - .4, 0, 3.2, .8, 3.2, MGREY);
+});
+const craneUpper = build(o => { // the arm and cab, turning on top of the mast; +z along the arm
+  o(BOX, 0, 1.7, 12, .4, .4, 26, MYEL);
+  for (const sx of [-.7, .7]) o(BOX, sx, .4, 12, .35, .35, 26, MYEL);
+  for (let z = -1; z < 25; z += 2.2) o(BOX, 0, 1.05, z, 1.4, .2, .2, MYEL);
+  o(BOX, 0, 1.2, -4.5, .4, .4, 8, MYEL); // short arm at the back with its weights
+  o(bevelShape(2.2, 1.6, 1.6, .2), 0, .6, -8, 1, 1, 1, MGREY);
+  o(bevelShape(1.8, 1.8, 2.2, .25), 1.6, .3, 1.2, 1, 1, 1, MYEL); // cab
+  o(BOX, 1.6, .5, 2.32, 1.5, .9, .06, GLASS, 3);
+});
+const blockMesh = build(o => o(bevelShape(2, 2, 2, .2), 0, 0, 0, 1, 1, 1, WHITE));
 // the Moon's surface: grey dust, darker patches, and craters with raised rims (the same rims the buggy feels)
 const moonWorld = (() => {
   const out = [], put = (shape, x, y, z, w, h, d, col, yaw = 0) => mesh(shape, x, y, z, w, h, d, yaw, col, 0, out);
@@ -1520,6 +1982,56 @@ function draw3(m, model, tint = WHITE, alpha = 1) {
 function dbox(cx, cy, cz, w, h, d, yaw, col) { draw3(cube, chain(mT(cx, cy, cz), mRY(yaw), mS(w, h, d)), col); }
 const at = o => chain(mT(o.x, o.y, o.z), mRY(o.a));
 
+// ---- the construction site ----
+const DIG_REST = [.9, -2.0, -.9], DIG_REACH = [.55, -1.65, -.2], DIG_DIG = [.55, -1.65, -.9], DIG_LIFT = [.9, -1.2, -.9], DIG_TIP = [.9, -1.2, -2.3];
+function diggerPose(d) { // boom, arm and bucket angles, whatever the digger is doing
+  const a = d.act;
+  if (!a) return DIG_REST;
+  const p = a.p;
+  if (a.kind === 'scoop') return p < .3 ? lerp3(DIG_REST, DIG_REACH, ease(p / .3)) : p < .6 ? lerp3(DIG_REACH, DIG_DIG, ease((p - .3) / .3)) : lerp3(DIG_DIG, DIG_REST, ease((p - .6) / .4));
+  return p < .35 ? lerp3(DIG_REST, DIG_LIFT, ease(p / .35)) : p < .65 ? lerp3(DIG_LIFT, DIG_TIP, ease((p - .35) / .3)) : lerp3(DIG_TIP, DIG_REST, ease((p - .65) / .35));
+}
+function bedAngle(t) { // the truck's bed rises, holds while the load slides out, and comes back down
+  const a = t.act;
+  if (!a) return 0;
+  return .75 * (a.p < .4 ? ease(a.p / .4) : a.p < .7 ? 1 : 1 - ease((a.p - .7) / .3));
+}
+function drawDigger(d) {
+  const base = at(d), [a1, a2, a3] = diggerPose(d);
+  draw3(diggerBody, base);
+  const boom = chain(base, mT(0, 2.0, 1.2), mRX(-a1)), arm = chain(boom, mT(0, 0, 4.6), mRX(-a2)), bucket = chain(arm, mT(0, 0, 3.6), mRX(-a3));
+  draw3(diggerBoom, boom); draw3(diggerArm, arm); draw3(diggerBucket, bucket);
+  if (d.load) draw3(ball, chain(bucket, mT(0, -.2, .55), mS(1.4, .7, 1.1)), DIRTC);
+}
+function drawTruck(t) {
+  const base = at(t);
+  draw3(truckBody, base);
+  for (const wz of [3.3, -1.2, -3.2]) for (const sx of [-1, 1])
+    draw3(carWheel, chain(base, mT(sx * 1.55, 1.1, wz), mRY(wz > 3 ? t.steer * .4 : 0), mRX(t.spin), mS(2.3, 2.3, 2.3)));
+  const bed = chain(base, mT(0, 1.95, -4.2), mRX(-bedAngle(t)));
+  draw3(truckBed, bed);
+  if (t.load && (!t.act || t.act.p < .5)) { const h = .25 + t.load * .2; draw3(cube, chain(bed, mT(0, .3 + h / 2, 3.3), mS(2.6, h, 6.0)), DIRTC); }
+}
+function drawDozer(z) {
+  const base = at(z);
+  draw3(dozerBody, base);
+  draw3(dozerBlade, chain(base, mT(0, .8 + (1 - z.blade) * 1.2, 3.4)));
+}
+function drawCrane(c) {
+  draw3(craneTower, mT(c.x, 0, c.z));
+  draw3(craneUpper, chain(mT(c.x, MAST, c.z), mRY(c.a)));
+  const [hx, hz] = hookAt(c);
+  dbox(hx, MAST - .1, hz, .9, .5, 1.3, c.a, MYELD); // the trolley rolling along the arm
+  dbox(hx, (MAST - .3 + c.hy) / 2, hz, .1, MAST - .3 - c.hy, .1, 0, STEELDARK); // the rope
+  dbox(hx, c.hy, hz, .6, .5, .6, c.a, hex(0xd32f2f)); // the hook
+}
+function drawSite() {
+  if (Math.hypot(me().x - site.x, me().z - site.z) > 300) return; // too far away to see
+  for (const p of piles) draw3(ball, chain(mT(p.x, 0, p.z), mS(2 * pileR(p), 2 * pileH(p), 2 * pileR(p))), DIRTC);
+  for (const b of blocks) draw3(blockMesh, mT(b.x, b.y + 1, b.z), b.col);
+  drawDigger(digger); drawTruck(truck); drawDozer(dozer); drawCrane(crane);
+}
+
 function drawCar() {
   const base = at(car);
   draw3(carBody, base);
@@ -1554,6 +2066,7 @@ function drawBlobShadows() {
     dbox(heli.x, g + .16, heli.z, s, .04, s * 1.6, heli.a, SHADOW);
   }
   for (const s of stars) if (!s.sky) dbox(s.x, .16, s.z, 1.8, .03, 1.8, 0, SHADOW);
+  for (const m of machines) dbox(m.x, .16, m.z, 2 * m.r, .04, 2.4 * m.r, m.a, SHADOW);
 }
 // the rocket's bottom centre: parked on the pad, climbing over it, leaning into flight in space, or on the Moon
 function rocketBase() {
@@ -1569,6 +2082,7 @@ function solidThings() {
   if (worldAlpha < .5) return; // high up the rocket, the little things have already faded away
   drawDucks();
   drawStars();
+  drawSite();
 }
 // render the sun's view of everything near `focus` into the shadow map; returns the sun's view-projection
 function shadowPass(focus) {
@@ -1604,8 +2118,9 @@ function camGoal() {
     return { eye: [v.x - dx * back, v.y + base + lift, v.z - fz * back], at: [v.x, v.y + base + 9, v.z] };
   }
   if (mode === 'buggy') return { eye: [v.x - dx * 13, v.y + 6, v.z - fz * 13], at: [v.x + dx * 4, v.y + 1.5, v.z + fz * 4] };
-  const h = mode === 'heli', back = h ? 17 : 12;
-  return { eye: [v.x - dx * back, Math.max(h ? v.y + 7 : 6, groundAt(cam.x, cam.z, 2) + 3), v.z - fz * back],
+  if (mode === 'crane') { const [hx, hz] = hookAt(v); return { eye: [v.x - dx * 6 + fz * 10, 30, v.z - fz * 6 - dx * 10], at: [hx, 6, hz] }; } // high behind the cab and a little to the side, looking down along the arm
+  const h = mode === 'heli', mc = isMachine(mode), back = h ? 17 : mc ? 16 : 12;
+  return { eye: [v.x - dx * back, Math.max(h ? v.y + 7 : mc ? 8 : 6, groundAt(cam.x, cam.z, 2) + 3), v.z - fz * back],
     at: [v.x + dx * 4, v.y + (h ? 2 : 1.5), v.z + fz * 4] };
 }
 function setFog(a, b) { if (prog.uFog) gl.uniform2f(prog.uFog, a, b); }
