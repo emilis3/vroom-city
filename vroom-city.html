@@ -490,52 +490,139 @@ for (const m of mountains) {
     cx += (rnd() - .5) * m.r * .12; cz += (rnd() - .5) * m.r * .12;
   }
 }
-// ---------- Water: a big lake with islands and wave ramps, and a river flowing out of it ----------
+// ---------- Water: a big lake round an island, and a river that loops round a mountain and back into it ----------
 // The car turns into the boat on water and back into the car on land, so water is never a wall.
-const LAKEW = 120, LAKED = 86, RIVERW = 12, SAND = hex(0xf3d98b), LAKEBLUE = hex(0x3fa9f5);
+// The lake is a cluster of overlapping round patches, so its shore curves round the mountains.
+const LAKE_AREA = 4 * 120 * 86, LAKER = 26, RIVERW = 18, SAND = hex(0xf3d98b), LAKEBLUE = hex(0x3fa9f5);
+const ISLAND_A = 40, ISLAND_B = 28, ISLAND_RING = 30; // half the island's length and width, and the open water round it
 let lake = null;
-for (let tries = 0; !lake && tries < 2000; tries++) {
-  const x = -LIM + rnd() * (W + 2 * LIM), z = -LIM + rnd() * (W + 2 * LIM), d = townDist(x, z);
-  if (d < 110 || d > 170) continue;
-  if (mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4 + 75)) continue;
-  lake = { x, z, w: LAKEW, d: LAKED };
+{
+  // the old lake's spot, found with the same rnd() numbers as before: the new lake grows from as near it as fits
+  let spot = null;
+  for (let tries = 0; !spot && tries < 2000; tries++) {
+    const x = -LIM + rnd() * (W + 2 * LIM), z = -LIM + rnd() * (W + 2 * LIM), d = townDist(x, z);
+    if (d < 110 || d > 170) continue;
+    if (mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4 + 75)) continue;
+    spot = { x, z };
+  }
+  // a round patch of water of radius r (with its 5 m beach) keeps 20 m from town, off the mountains and inside the world
+  const fits = (x, z, r) => townDist(x, z) >= r + 25 && !mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4 + r + 5) &&
+    x - r > -LIM + 10 && x + r < W + LIM - 10 && z - r > -LIM + 10 && z + r < W + LIM - 10;
+  // the island lies along the town's edge; lx runs across it, lz along it
+  const grow = (cx, cz) => {
+    const yaw = Math.atan2(cx - W / 2, cz - W / 2) + Math.PI / 2, c = Math.cos(yaw), s = Math.sin(yaw);
+    const inEllipse = (lx, lz, a, b) => (lx / b) ** 2 + (lz / a) ** 2 < 1;
+    for (let t = 0; t < 32; t++) { // the island and the water round it must fit before anything else
+      const e = t / 32 * Math.PI * 2, lx = Math.cos(e) * (ISLAND_B + ISLAND_RING), lz = Math.sin(e) * (ISLAND_A + ISLAND_RING);
+      if (!fits(cx + lx * c + lz * s, cz - lx * s + lz * c, 0)) return null;
+    }
+    const G = 4, H = 240, n = 2 * H / G, cells = new Uint8Array(n * n), discs = [];
+    const cands = [];
+    for (let i = -H; i <= H; i += 10) for (let j = -H; j <= H; j += 10) cands.push([i, j, Math.hypot(i * 1.4, j)]);
+    cands.sort((p, q) => p[2] - q[2]);
+    let area = 0;
+    for (const [lx, lz] of cands) {
+      const x = cx + lx * c + lz * s, z = cz - lx * s + lz * c;
+      if (!fits(x, z, LAKER)) continue;
+      const fresh = [];
+      for (let i = Math.floor((lx - LAKER + H) / G); i <= (lx + LAKER + H) / G; i++) for (let j = Math.floor((lz - LAKER + H) / G); j <= (lz + LAKER + H) / G; j++) {
+        if (i < 0 || j < 0 || i >= n || j >= n || cells[i * n + j]) continue;
+        const px = i * G - H + G / 2, pz = j * G - H + G / 2;
+        if (Math.hypot(px - lx, pz - lz) < LAKER) fresh.push([i * n + j, px, pz]);
+      }
+      if (fresh.length < 40) continue; // adds too little to be worth drawing
+      discs.push({ x, z, r: LAKER });
+      for (const [k, px, pz] of fresh) { cells[k] = 1; if (!inEllipse(px, pz, ISLAND_A, ISLAND_B)) area += G * G; }
+      if (area >= LAKE_AREA) break;
+    }
+    if (area < LAKE_AREA * .9) return null;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { // all of the ring round the island is water
+      const px = i * G - H + G / 2, pz = j * G - H + G / 2;
+      if (inEllipse(px, pz, ISLAND_A + ISLAND_RING, ISLAND_B + ISLAND_RING) && !cells[i * n + j]) return null;
+    }
+    return { x: cx, z: cz, area, discs, island: { x: cx, z: cz, a: ISLAND_A, b: ISLAND_B, yaw } };
+  };
+  const spots = [];
+  for (let x = -LIM; x <= W + LIM; x += 10) for (let z = -LIM; z <= W + LIM; z += 10) {
+    const d = townDist(x, z);
+    if (d > 100 && d < 260) spots.push({ x, z, k: Math.hypot(x - spot.x, z - spot.z) });
+  }
+  spots.sort((p, q) => p.k - q.k);
+  for (const p of spots) if ((lake = grow(p.x, p.z))) break;
 }
-const inLake = (x, z, m) => Math.abs(x - lake.x) < LAKEW / 2 + m && Math.abs(z - lake.z) < LAKED / 2 + m;
-// islands: the old tiny one with its tree, and two more
-const islands = [{ x: lake.x - 10, z: lake.z + 8, s: 8 }];
-for (let tries = 0; islands.length < 3 && tries < 500; tries++) {
-  const s = 6 + rnd() * 6, x = lake.x + (rnd() - .5) * (LAKEW - s - 24), z = lake.z + (rnd() - .5) * (LAKED - s - 24);
-  if (islands.some(i => Math.abs(i.x - x) < (i.s + s) / 2 + 12 && Math.abs(i.z - z) < (i.s + s) / 2 + 12)) continue;
-  islands.push({ x, z, s });
+const inLake = (x, z, m) => lake.discs.some(d => Math.hypot(x - d.x, z - d.z) < d.r + m);
+const island = lake.island;
+// island coordinates: across and along it, from its middle
+function islandLocal(x, z) {
+  const c = Math.cos(island.yaw), s = Math.sin(island.yaw), dx = x - island.x, dz = z - island.z;
+  return [dx * c - dz * s, dx * s + dz * c];
 }
-const onIsland = (x, z, m) => islands.some(i => Math.abs(x - i.x) < i.s / 2 + m && Math.abs(z - i.z) < i.s / 2 + m);
-// the river's centre line: starts inside the lake, runs out the side facing away from town, then winds on
+function islandWorld(lx, lz) {
+  const c = Math.cos(island.yaw), s = Math.sin(island.yaw);
+  return [island.x + lx * c + lz * s, island.z - lx * s + lz * c];
+}
+const onIsland = (x, z, m) => { const [lx, lz] = islandLocal(x, z); return (lx / (island.b + m)) ** 2 + (lz / (island.a + m)) ** 2 < 1; };
+// the river's centre line: out of the lake on one side of a mountain, round its far side and back into the lake on the other
 const river = [];
 {
-  const out = Math.atan2(lake.x - W / 2, lake.z - W / 2); // headings: x moves by sin(a), z by cos(a)
-  let best = null;
-  for (const side of [1, -1]) { // try bending either way and keep the longer river
-    const pts = [], dx = Math.sin(out), dz = Math.cos(out);
-    const t = Math.min(LAKEW / 2 / Math.max(1e-6, Math.abs(dx)), LAKED / 2 / Math.max(1e-6, Math.abs(dz)));
-    pts.push({ x: lake.x + dx * (t - 4), z: lake.z + dz * (t - 4) });
-    let a = out, len = 0;
-    while (len < 340) {
-      const p = pts[pts.length - 1], want = out + side * (len > 40 ? .9 : .9 * len / 40) + .35 * Math.sin(len / 45);
-      let next = null;
-      for (const turn of [0, .3, -.3, .6, -.6, .9, -.9]) {
-        const na = a + Math.max(-.35, Math.min(.35, want - a)) + turn, x = p.x + Math.sin(na) * 10, z = p.z + Math.cos(na) * 10;
-        if (x < -LIM + 10 || x > W + LIM - 10 || z < -LIM + 10 || z > W + LIM - 10) continue;
-        if (townDist(x, z) < 34 || (len > 20 && inLake(x, z, 12))) continue;
-        if (mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4 + 12)) continue;
-        if (pts.slice(0, -3).some(q => Math.hypot(q.x - x, q.z - z) < RIVERW * 2)) continue;
-        next = { x, z, a: na }; break;
-      }
-      if (!next) break;
-      pts.push({ x: next.x, z: next.z }); a = next.a; len += 10;
-    }
-    if (!best || pts.length > best.length) best = pts;
+  const G = 4, n = Math.round((W + 2 * LIM) / G) + 1, X = i => -LIM + i * G;
+  const blockedBase = (x, z) => x < -LIM + 12 || x > W + LIM - 12 || z < -LIM + 12 || z > W + LIM - 12 || townDist(x, z) < 36 ||
+    mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4 + RIVERW / 2 + 9) || inLake(x, z, RIVERW / 2 + 9);
+  const base = new Uint8Array(n * n), near = new Uint8Array(n * n);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    base[i * n + j] = blockedBase(X(i), X(j)) ? 1 : 0;
+    near[i * n + j] = inLake(X(i), X(j), RIVERW / 2 + 15) ? 1 : 0;
   }
-  river.push(...best);
+  const route = m => {
+    const ux = m.x - lake.x, uz = m.z - lake.z, L = Math.hypot(ux, uz), dx = ux / L, dz = uz / L;
+    // a wall along the line from the lake through the mountain, open only past the mountain's far side,
+    // so the river must go round it; it leaves the lake more than 40 m to one side of that line and comes back 40 m to the other
+    const side = (x, z) => dx * (z - lake.z) - dz * (x - lake.x), along = (x, z) => dx * (x - lake.x) + dz * (z - lake.z);
+    const blocked = k => base[k] || (Math.abs(side(X(Math.floor(k / n)), X(k % n))) < G * 1.5 && along(X(Math.floor(k / n)), X(k % n)) < L);
+    const cost = new Float64Array(n * n).fill(Infinity), from = new Int32Array(n * n).fill(-1), heap = [];
+    const push = (k, c) => { heap.push([c, k]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+    const pop = () => { const top = heap[0], end = heap.pop(); if (heap.length) { heap[0] = end; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let b = i; if (l < heap.length && heap[l][0] < heap[b][0]) b = l; if (r < heap.length && heap[r][0] < heap[b][0]) b = r; if (b === i) break; [heap[b], heap[i]] = [heap[i], heap[b]]; i = b; } } return top; };
+    for (let k = 0; k < n * n; k++) if (near[k] && !blocked(k) && side(X(Math.floor(k / n)), X(k % n)) > 40 && along(X(Math.floor(k / n)), X(k % n)) > 0) { cost[k] = 0; push(k, 0); }
+    let goal = -1;
+    while (heap.length) {
+      const [c, k] = pop();
+      if (c > cost[k]) continue;
+      const i = Math.floor(k / n), j = k % n;
+      if (near[k] && side(X(i), X(j)) < -40) { goal = k; break; } // the ends meet the lake well apart
+      for (const [di, dj, w] of [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]]) {
+        const a = i + di, b = j + dj, q = a * n + b;
+        if (a < 0 || b < 0 || a >= n || b >= n || blocked(q)) continue;
+        const nc = c + w * G;
+        if (nc < cost[q]) { cost[q] = nc; from[q] = k; push(q, nc); }
+      }
+    }
+    if (goal < 0) return null;
+    let pts = [];
+    for (let k = goal; k >= 0; k = from[k]) pts.push({ x: X(Math.floor(k / n)), z: X(k % n) });
+    pts = pts.filter((p, i) => i % 3 === 0 || i === pts.length - 1);
+    for (let it = 0; it < 3; it++) { // round off the corners
+      const out = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        out.push({ x: a.x * .75 + b.x * .25, z: a.z * .75 + b.z * .25 }, { x: a.x * .25 + b.x * .75, z: a.z * .25 + b.z * .75 });
+      }
+      out.push(pts[pts.length - 1]); pts = out;
+    }
+    const even = [pts[0]]; // points about 10 m apart
+    for (const p of pts) { const q = even[even.length - 1]; if (Math.hypot(p.x - q.x, p.z - q.z) >= 10) even.push(p); }
+    if (even[even.length - 1] !== pts[pts.length - 1]) even.push(pts[pts.length - 1]);
+    for (const end of [0, even.length - 1]) { // carry each end on into the lake so the water joins up
+      const p = even[end], d = lake.discs.reduce((a, b) => Math.hypot(b.x - p.x, b.z - p.z) < Math.hypot(a.x - p.x, a.z - p.z) ? b : a);
+      const l = Math.hypot(d.x - p.x, d.z - p.z), q = { x: p.x + (d.x - p.x) / l * (l - d.r + 8), z: p.z + (d.z - p.z) / l * (l - d.r + 8) };
+      if (end === 0) even.unshift(q); else even.push(q);
+    }
+    let len = 0;
+    for (let i = 1; i < even.length; i++) len += Math.hypot(even[i].x - even[i - 1].x, even[i].z - even[i - 1].z);
+    const ok = even.every(p => townDist(p.x, p.z) >= 34 && !mountains.some(k => Math.hypot(k.x - p.x, k.z - p.z) < k.r * 1.4 + RIVERW / 2));
+    return ok && len > 250 && len < 800 ? even : null;
+  };
+  const order = mountains.filter(m => !inLake(m.x, m.z, m.r * 1.4 + 30)).sort((a, b) => Math.hypot(a.x - lake.x, a.z - lake.z) - Math.hypot(b.x - lake.x, b.z - lake.z));
+  for (const m of order) { const r = route(m); if (r) { river.push(...r); river.round = m; break; } }
 }
 function riverDist(x, z) {
   let best = Infinity;
@@ -546,36 +633,51 @@ function riverDist(x, z) {
   }
   return best;
 }
-// water grown by m (m < 0 shrinks it), ignoring islands
+// water grown by m (m < 0 shrinks it), ignoring the island
 const wet = (x, z, m = 0) => inLake(x, z, m) || riverDist(x, z) < RIVERW / 2 + m;
 // clearly on the water: at least m from any shore. Clearly on land: at least m from the water.
 const inWater = (x, z, m = 0) => wet(x, z, -m) && !onIsland(x, z, m);
 const onLand = (x, z, m = 0) => !wet(x, z, m) || onIsland(x, z, -m);
 
-box(lake.x, 0, lake.z, LAKEW + 10, .1, LAKED + 10, SAND); // beach
-box(lake.x, 0, lake.z, LAKEW, .2, LAKED, LAKEBLUE, 1);
+for (const d of lake.discs) mesh(DISC, d.x, .045, d.z, 2 * d.r + 10, .09, 2 * d.r + 10, 0, SAND); // beach
+for (const d of lake.discs) mesh(DISC, d.x, .09, d.z, 2 * d.r, .18, 2 * d.r, 0, LAKEBLUE, 1);
 for (let i = 1; i < river.length; i++) { // river: overlapping strips with round joints, on sandy banks
   const a = river[i - 1], b = river[i], len = Math.hypot(b.x - a.x, b.z - a.z), yaw = Math.atan2(b.x - a.x, b.z - a.z);
   mesh(BOX, (a.x + b.x) / 2, .045, (a.z + b.z) / 2, RIVERW + 5, .09, len, yaw, SAND);
   mesh(BOX, (a.x + b.x) / 2, .09, (a.z + b.z) / 2, RIVERW, .18, len, yaw, LAKEBLUE, 1);
 }
 for (const p of river) { mesh(DISC, p.x, .045, p.z, RIVERW + 5, .09, RIVERW + 5, 0, SAND); mesh(DISC, p.x, .09, p.z, RIVERW, .18, RIVERW, 0, LAKEBLUE, 1); }
-for (const i of islands) {
-  box(i.x, 0, i.z, i.s + 2, .4, i.s + 2, SAND);
-  box(i.x, 0, i.z, i.s, .7, i.s, hex(0x6dbb5a));
-  tree(i.x, i.z);
-  solids[solids.length - 1].car = false; // never traps a car that steps off the boat
+// the island: a sandy beach round a grassy middle, with trees well in from the beach
+mesh(DISC, island.x, .2, island.z, 2 * island.b, .4, 2 * island.a, island.yaw, SAND);
+mesh(DISC, island.x, .35, island.z, 2 * island.b - 8, .7, 2 * island.a - 8, island.yaw, hex(0x6dbb5a));
+const islandTrees = [];
+for (let tries = 0; islandTrees.length < 12 && tries < 500; tries++) {
+  const lx = (rnd() * 2 - 1) * (island.b - 10), lz = (rnd() * 2 - 1) * (island.a - 10);
+  if ((lx / (island.b - 10)) ** 2 + (lz / (island.a - 10)) ** 2 >= 1) continue;
+  const [x, z] = islandWorld(lx, lz);
+  if (islandTrees.some(t => Math.hypot(t.x - x, t.z - z) < 7)) continue;
+  islandTrees.push({ x, z }); tree(x, z, drnd() < .3);
 }
-// wave ramps: little humps that make a fast boat hop
+// wave ramps: humps that make a fast boat hop; big ones in the lake throw it higher
 const ramps = [];
-for (let tries = 0; ramps.length < 4 && tries < 500; tries++) {
-  const x = lake.x + (rnd() - .5) * (LAKEW - 24), z = lake.z + (rnd() - .5) * (LAKED - 24);
-  if (!inWater(x, z, 8) || ramps.some(r => Math.hypot(r.x - x, r.z - z) < 24)) continue;
-  ramps.push({ x, z, r: 3.5, a: rnd() * Math.PI });
+const lakePoint = () => { const d = pick(lake.discs), a = rnd() * 6.283, r = Math.sqrt(rnd()) * d.r; return [d.x + Math.cos(a) * r, d.z + Math.sin(a) * r]; };
+for (let tries = 0; ramps.length < 5 && tries < 2000; tries++) {
+  const big = ramps.length < 2, r = big ? 7 : 3.5, [x, z] = lakePoint();
+  if (!inWater(x, z, r + 8) || ramps.some(q => Math.hypot(q.x - x, q.z - z) < 24 + q.r + r)) continue;
+  ramps.push({ x, z, r, big, a: rnd() * Math.PI });
+}
+{ // three on the river, spread along it and turned across it so the boat meets them head on
+  let len = 0; const at = [0];
+  for (let i = 1; i < river.length; i++) at.push(len += Math.hypot(river[i].x - river[i - 1].x, river[i].z - river[i - 1].z));
+  for (const f of [.25, .5, .75]) {
+    const i = Math.max(1, at.findIndex(l => l >= len * f)), a = river[i - 1], b = river[i];
+    ramps.push({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2, r: 3.5, big: false, river: true, a: Math.atan2(b.x - a.x, b.z - a.z) + Math.PI / 2 });
+  }
 }
 for (const r of ramps) {
-  mesh(GABLE, r.x, .55, r.z, 6, .7, 7, r.a, hex(0x5ec8f5), 1);
-  mesh(BOX, r.x, .88, r.z, .9, .12, 7, r.a, hex(0xffffff)); // foam on the crest
+  const k = r.big ? 2 : 1;
+  mesh(GABLE, r.x, .2 + .35 * k, r.z, 6 * k, .7 * k, 7 * k, r.a, hex(0x5ec8f5), 1);
+  mesh(BOX, r.x, .2 + .68 * k, r.z, .9 * k, .12 * k, 7 * k, r.a, hex(0xffffff)); // foam on the crest
 }
 const ghosts = []; // trees left out for the launch station: later trees still keep clear of them, as before
 function freeSpot(x, z, gap) {
@@ -863,7 +965,7 @@ function spinRotor(spin, flying, dt) { return Math.max(0, Math.min(1, spin + (fl
 // ---------- Game state ----------
 const car = { x: 3 * P, y: 0, z: P / 2, a: 0, v: 0, steer: 0, spin: 0 };
 const heli = { x: 0, y: 0, z: 0, a: 0, v: 0, rotor: 0, lift: 0 };
-const boat = { x: 0, y: .2, z: 0, a: 0, v: 0, steer: 0, hop: 0, vy: 0, onRamp: false }; // hop = height above the water
+const boat = { x: 0, y: .2, z: 0, a: 0, v: 0, steer: 0, hop: 0, vy: 0, onRamp: false, big: false }; // hop = height above the water, big = off a big ramp
 // count = countdown seconds left, thrust = how hard the engines push (0 to 1), auto = landing by itself
 // lift = the time T the rocket last left the ground, or null
 const rocket = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, pitch: 0, count: 0, thrust: 0, auto: false, lift: null };
@@ -987,27 +1089,36 @@ function skyStar() { // only the helicopter can reach these: on mountain tops or
   const x = rnd() * W, z = rnd() * W;
   return { x, y: groundAt(x, z, 3) + 12 + rnd() * 25, z, sky: true, phase };
 }
+// somewhere out on the lake or the river, half the time each
+function waterPoint() {
+  if (rnd() < .5) return lakePoint();
+  const i = 1 + Math.floor(rnd() * (river.length - 1)), a = river[i - 1], b = river[i], t = rnd();
+  return [a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t];
+}
 function waterStar() { // only the boat can catch these: out on the lake and the river, away from the shore
   for (;;) {
-    let x, z;
-    if (rnd() < .5) { x = lake.x + (rnd() - .5) * LAKEW; z = lake.z + (rnd() - .5) * LAKED; }
-    else {
-      const i = 1 + Math.floor(rnd() * (river.length - 1)), a = river[i - 1], b = river[i], t = rnd();
-      x = a.x + (b.x - a.x) * t; z = a.z + (b.z - a.z) * t;
-    }
+    const [x, z] = waterPoint();
     if (!inWater(x, z, 4) || ramps.some(r => Math.hypot(r.x - x, r.z - z) < r.r + 3)) continue;
     if (Math.hypot(x - me().x, z - me().z) > 40) return { x, y: 2.2, z, sky: false, water: true, phase: rnd() * 6 };
   }
 }
 for (let i = 0; i < 14; i++) stars.push(roadStar());
 for (let i = 0; i < 10; i++) stars.push(skyStar());
-for (let i = 0; i < 6; i++) stars.push(waterStar());
+for (let i = 0; i < 10; i++) stars.push(waterStar());
 
-// ducks paddle about the lake, and scatter with a quack when the boat comes near
+// ducks paddle about the lake and the river, and scatter with a quack when the boat comes near
 const ducks = [];
-for (let tries = 0; ducks.length < 6 && tries < 500; tries++) {
-  const x = lake.x + (rnd() - .5) * (LAKEW - 12), z = lake.z + (rnd() - .5) * (LAKED - 12);
+for (let tries = 0; ducks.length < 10 && tries < 500; tries++) {
+  const [x, z] = waterPoint();
   if (inWater(x, z, 4)) ducks.push({ x, z, hx: x, hz: z, a: rnd() * 6.283, scared: false, phase: rnd() * 6 });
+}
+// rabbits and deer wander about the island, and hop or run off when the car comes near
+const animals = [];
+for (let tries = 0; animals.length < 7 && tries < 500; tries++) {
+  const lx = (rnd() * 2 - 1) * (island.b - 8), lz = (rnd() * 2 - 1) * (island.a - 8), [x, z] = islandWorld(lx, lz);
+  if (!onIsland(x, z, -8) || islandTrees.some(t => Math.hypot(t.x - x, t.z - z) < 4) || animals.some(k => Math.hypot(k.x - x, k.z - z) < 6)) continue;
+  const deer = animals.length >= 4;
+  animals.push({ x, z, hx: x, hz: z, a: rnd() * 6.283, deer, brown: !deer && animals.length % 2 === 1, scared: false, moving: false, phase: rnd() * 6 });
 }
 
 function hits(x, z, r = 1.7, self = null) { // self: the machine asking, which is not in its own way
@@ -1056,7 +1167,7 @@ setMode('car');
 // car and boat swap where the water starts, with a 1.5 margin either side of the shore so they never flicker
 const SHORE = 1.5;
 function toBoat(from) {
-  Object.assign(boat, { x: from.x, z: from.z, a: from.a, v: from.v || 0, steer: from.steer || 0, hop: 0, vy: 0, y: .2, onRamp: false });
+  Object.assign(boat, { x: from.x, z: from.z, a: from.a, v: from.v || 0, steer: from.steer || 0, hop: 0, vy: 0, y: .2, onRamp: false, big: false });
   setMode('boat'); splashSound(); splash(boat.x, boat.z, 30); puff(boat.x, 1, boat.z, 15);
 }
 function toCar() {
@@ -1187,11 +1298,12 @@ function driveBoat(dt) {
     boat.v *= -0.3;
   }
 
-  // wave ramps: fast makes a big hop, slow just a little bump
+  // wave ramps: fast makes a big hop, slow just a little bump; a big ramp throws the boat 1.5 times as high
   const ramp = ramps.find(r => Math.hypot(r.x - boat.x, r.z - boat.z) < r.r);
   if (ramp && !boat.onRamp && boat.hop === 0) {
     const fast = Math.abs(boat.v) > 14;
-    boat.vy = fast ? 5 + Math.abs(boat.v) * .2 : 1.5;
+    boat.vy = (fast ? 5 + Math.abs(boat.v) * .2 : 1.5) * (ramp.big ? Math.sqrt(1.5) : 1);
+    boat.big = ramp.big && fast;
     if (fast) { splashSound(); splash(boat.x, boat.z, 18); }
   }
   boat.onRamp = !!ramp;
@@ -1199,7 +1311,8 @@ function driveBoat(dt) {
     boat.vy -= 20 * dt; boat.hop += boat.vy * dt;
     if (boat.hop <= 0) { // soft landing
       if (boat.vy < -5) { splashSound(); splash(boat.x, boat.z, 24); }
-      boat.hop = 0; boat.vy = 0;
+      if (boat.big) splash(boat.x, boat.z, 32, true); // and a ring of spray after a big jump
+      boat.hop = 0; boat.vy = 0; boat.big = false;
     }
   }
   boat.y = .2 + boat.hop;
@@ -1219,9 +1332,31 @@ function updateDucks(dt) {
       dx = hx / l; dz = hz / l; sp = 1.2;
     }
     const nx = d.x + dx * sp * dt, nz = d.z + dz * sp * dt;
-    if (inLake(nx, nz, -3) && inWater(nx, nz, 1.5)) { d.x = nx; d.z = nz; }
+    if (inWater(nx, nz, 1.5)) { d.x = nx; d.z = nz; }
     const want = Math.atan2(dx, dz), turn = Math.atan2(Math.sin(want - d.a), Math.cos(want - d.a));
     d.a += turn * Math.min(1, dt * 5);
+  }
+}
+function updateAnimals(dt) {
+  for (const k of animals) {
+    const cx = k.x - car.x, cz = k.z - car.z, near = Math.hypot(cx, cz);
+    if (mode === 'car' && near < 10) k.scared = true;
+    if (mode !== 'car' || near > 16) k.scared = false;
+    let dx, dz, sp;
+    if (k.scared) { dx = cx / (near || 1); dz = cz / (near || 1); sp = k.deer ? 6 : 5; } // off a little way
+    else { // amble round a little circle near home
+      const tx = k.hx + Math.sin(T * .25 + k.phase) * 4 - k.x, tz = k.hz + Math.cos(T * .25 + k.phase) * 4 - k.z, l = Math.hypot(tx, tz);
+      if (l < .6) { k.moving = false; continue; }
+      dx = tx / l; dz = tz / l; sp = 1.2;
+    }
+    k.moving = false;
+    const free = (x, z) => onIsland(x, z, -4) && !islandTrees.some(t => Math.hypot(t.x - x, t.z - z) < 1.6);
+    for (const [mx, mz] of [[dx, dz], [dx, 0], [0, dz]]) { // slide along the beach or round a tree when blocked
+      const nx = k.x + mx * sp * dt, nz = k.z + mz * sp * dt;
+      if ((mx || mz) && free(nx, nz)) { k.x = nx; k.z = nz; k.moving = true; break; }
+    }
+    const want = Math.atan2(dx, dz), turn = Math.atan2(Math.sin(want - k.a), Math.cos(want - k.a));
+    k.a += turn * Math.min(1, dt * 5);
   }
 }
 
@@ -1692,6 +1827,7 @@ function update(dt) {
   else if (mode === 'car') driveCar(dt); else if (mode === 'boat') driveBoat(dt); else if (mode === 'heli') flyHeli(dt);
   if (scene === 'earth') updateSite(dt);
   updateDucks(dt);
+  updateAnimals(dt);
   refreshHud();
 
   const v = me(), vy = v.y + 1.5;
@@ -1752,18 +1888,24 @@ function sparkle(x, y, z, n) {
     fx.push({ x, y, z, vx: Math.cos(a) * r * sp, vy: b * sp + 2, vz: Math.sin(a) * r * sp, life: .7 + drnd() * .5, max: 1.2, col: SPARK[k % 3] });
   }
 }
-function splash(x, z, n) {
+function splash(x, z, n, ring = false) {
   for (let k = 0; k < n; k++) {
-    const a = drnd() * 6.283, sp = 2 + drnd() * 5;
-    fx.push({ spray: true, x, y: .4, z, vx: Math.cos(a) * sp, vy: 5 + drnd() * 6, vz: Math.sin(a) * sp, life: 1, max: 1 });
+    const a = ring ? k / n * 6.283 : drnd() * 6.283, sp = ring ? 7 + drnd() * 2 : 2 + drnd() * 5;
+    fx.push({ spray: true, x, y: .4, z, vx: Math.cos(a) * sp, vy: ring ? 3.5 + drnd() * 2 : 5 + drnd() * 6, vz: Math.sin(a) * sp, life: 1, max: 1 });
   }
 }
+let foamGap = 0; // metres to go before the next patch of foam
 function updateFx(dt) {
   const bv = Math.abs(boat.v);
   if (mode === 'boat' && bv > 4 && boat.hop === 0 && drnd() < dt * bv * 3) { // white spray behind the boat, more when fast
     const c = Math.cos(boat.a), s = Math.sin(boat.a), side = drnd() < .5 ? -1 : 1, ox = side * .9, oz = -2.6, out = 1 + drnd() * 2;
     fx.push({ spray: true, x: boat.x + ox * c + oz * s, y: .4, z: boat.z - ox * s + oz * c,
       vx: side * c * out - s * 2, vy: 1.5 + bv * .12 + drnd(), vz: -side * s * out - c * 2, life: .8, max: .8 });
+  }
+  if (mode === 'boat' && bv > 14 && boat.hop === 0 && (foamGap -= bv * dt) <= 0) { // a fast boat leaves a trail of foam
+    foamGap = 2.5;
+    const x = boat.x - Math.sin(boat.a) * 2.8, z = boat.z - Math.cos(boat.a) * 2.8;
+    if (inWater(x, z) && fx.filter(f => f.foam).length < 40) fx.push({ foam: true, x, y: .2, z, a: boat.a, vx: 0, vy: 0, vz: 0, life: 2, max: 2 });
   }
   if (mode === 'car' && Math.abs(car.steer) > .55 && Math.abs(car.v) > 12 && drnd() < dt * 30) { // hard turn: dust from a back wheel
     const c = Math.cos(car.a), s = Math.sin(car.a), ox = drnd() < .5 ? -1.1 : 1.1, oz = -1.4;
@@ -1786,7 +1928,7 @@ function updateFx(dt) {
   }
   for (const f of fx) {
     f.life -= dt; f.x += f.vx * dt; f.y += f.vy * dt; f.z += f.vz * dt;
-    if (f.dust) { const k = Math.pow(.3, dt); f.vx *= k; f.vz *= k; f.vy *= k; } else f.vy -= (f.spray ? 16 : 6) * dt;
+    if (f.dust) { const k = Math.pow(.3, dt); f.vx *= k; f.vz *= k; f.vy *= k; } else if (!f.foam) f.vy -= (f.spray ? 16 : 6) * dt;
     if (f.spray && f.y < .15) f.life = 0; // back in the water
   }
   for (let i = fx.length - 1; i >= 0; i--) if (fx[i].life <= 0) fx.splice(i, 1);
@@ -1881,6 +2023,33 @@ const duckMesh = build(o => {
   o(BOX, 0, .75, .82, .3, .12, .3, hex(0xff8f00)); // beak
   for (const sx of [-1, 1]) o(BOX, sx * .2, .9, .7, .08, .1, .06, hex(0x222222)); // eyes
   o(BOX, 0, .45, -.65, .35, .2, .25, hex(0xffc107)); // tail
+});
+// a little blocky rabbit and a deer with small antlers
+const rabbitMesh = build(o => {
+  o(bevelShape(.7, .6, 1, .2), 0, .35, 0, 1, 1, 1, hex(0xf5f5f0));
+  o(ICO1, 0, .8, .45, .5, .5, .5, hex(0xf5f5f0));
+  for (const sx of [-1, 1]) {
+    o(BOX, sx * .12, 1.2, .38, .12, .5, .08, hex(0xf5f5f0)); // ears
+    o(BOX, sx * .12, 1.2, .43, .06, .36, .02, hex(0xf8bbd0));
+    o(BOX, sx * .17, .86, .68, .07, .08, .05, hex(0x222222)); // eyes
+  }
+  o(BOX, 0, .76, .71, .1, .07, .04, hex(0xf48fb1)); // nose
+  o(ICO1, 0, .5, -.52, .3, .3, .3, hex(0xffffff)); // fluffy tail
+});
+const DEER = hex(0xa0683a), ANTLER = hex(0x6d4c2f);
+const deerMesh = build(o => {
+  o(bevelShape(1, .9, 2, .25), 0, 1.45, 0, 1, 1, 1, DEER);
+  for (const sx of [-.32, .32]) for (const sz of [-.7, .7]) o(BOX, sx, .5, sz, .2, 1, .2, ANTLER);
+  o(BOX, 0, 2.1, .85, .35, .9, .35, DEER); // neck
+  o(bevelShape(.5, .45, .8, .12), 0, 2.6, 1.15, 1, 1, 1, DEER);
+  o(BOX, 0, 2.55, 1.58, .2, .16, .1, hex(0x222222)); // nose
+  for (const sx of [-1, 1]) {
+    o(BOX, sx * .2, 2.72, 1.3, .06, .08, .06, hex(0x222222)); // eyes
+    o(BOX, sx * .18, 3.05, 1, .08, .5, .08, ANTLER); // antlers
+    o(BOX, sx * .3, 3.2, 1, .28, .07, .07, ANTLER);
+    o(BOX, sx * .3, 2.85, .95, .22, .1, .08, DEER); // ears
+  }
+  o(BOX, 0, 1.75, -1.02, .25, .3, .1, hex(0xfafafa)); // white tail
 });
 // the rocket: a shiny stainless-steel ship with a rounded nose, flaps, a dark heat-shield belly and an astronaut at the window
 const STEEL = hex(0xc9d1d8), STEELDARK = hex(0x9aa5ae), TILE = hex(0x2b2f36), SKIN = hex(0xf2c9a0), SUIT = hex(0xf5f7fa), VISOR = hex(0xffc94a);
@@ -2133,6 +2302,12 @@ function drawBoat() {
 function drawDucks() {
   for (const d of ducks) draw3(duckMesh, chain(mT(d.x, .12 + Math.sin(T * 3 + d.phase) * .05, d.z), mRY(d.a)));
 }
+function drawAnimals() {
+  for (const k of animals) {
+    const lift = !k.moving ? 0 : k.deer ? Math.abs(Math.sin(T * 6 + k.phase)) * .08 : Math.abs(Math.sin(T * 9 + k.phase)) * .35; // rabbits hop
+    draw3(k.deer ? deerMesh : rabbitMesh, chain(mT(k.x, .7 + lift, k.z), mRY(k.a)), k.brown ? [.72, .52, .36] : WHITE);
+  }
+}
 function drawHeli() {
   const base = at(heli);
   draw3(heliBody, base);
@@ -2168,6 +2343,7 @@ function solidThings() {
   drawRocket();
   if (worldAlpha < .5) return; // high up the rocket, the little things have already faded away
   drawDucks();
+  drawAnimals();
   drawStars();
   drawSite();
 }
@@ -2341,6 +2517,10 @@ function draw() {
     const t = 1 - f.life / f.max, s = (.5 + t * 1.6) * f.size;
     draw3(ball, chain(mT(f.x, f.y, f.z), mS(s, s * .8, s)), scene === 'moon' ? [.75, .75, .75] : DUST, .35 * (1 - t));
   }
+  for (const f of fx) if (f.foam) { // flat patches that spread out and fade
+    const t = 1 - f.life / f.max, s = 1.6 + t * 2.4;
+    draw3(ball, chain(mT(f.x, f.y, f.z), mRY(f.a), mS(s, .03, s * 1.4)), WHITE, .55 * (1 - t));
+  }
   for (const f of fx) if (f.spray) {
     const t = 1 - f.life / f.max, s = .22 + t * .4;
     draw3(ball, chain(mT(f.x, f.y, f.z), mS(s, s, s)), WHITE, .7 * (1 - t * t));
@@ -2359,7 +2539,7 @@ function draw() {
     const g = 22 * (1 + .06 * Math.sin(T * 5 + s.phase));
     draw3(glowBall, chain(mT(s.x, s.y + Math.sin(T * 3 + s.phase) * 1.5, s.z), mS(g, g, g)), [1, .8, .25], .45);
   }
-  for (const f of fx) if (!f.dust && !f.spray) {
+  for (const f of fx) if (!f.dust && !f.spray && !f.foam) {
     const s = .25 + .3 * Math.abs(Math.sin(f.life * 18));
     draw3(sparkMesh, chain(mT(f.x, f.y, f.z), mRY(f.life * 9), mS(s, s, s)), f.col, Math.min(1, f.life * 2));
   }

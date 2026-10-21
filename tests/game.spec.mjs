@@ -148,39 +148,122 @@ test('driving, flying and collecting a star still work, with the new effects', a
   expect(problems).toEqual([]);
 });
 
-// ---------- Boat (#4) ----------
+// ---------- Boat (#4, #17) ----------
 
-test('water: bigger lake with islands and ramps, a long winding river, nothing in town', async ({ page }) => {
+// In the page: where the water ends going from (x, z) in direction (dx, dz), and a short way either side of that edge.
+// t > 0 is on the land side, t < 0 on the water side. From the island's middle outwards it finds the island's beach.
+const SHORE_AT = `(x, z, dx, dz) => {
+  const l = Math.hypot(dx, dz); dx /= l; dz /= l;
+  const start = inWater(x, z, 0);
+  let t = 0; while (inWater(x + dx * t, z + dz * t, 0) === start) t += .5;
+  let a = t - .5, b = t; for (let i = 0; i < 30; i++) { const m = (a + b) / 2; if (inWater(x + dx * m, z + dz * m, 0) === start) a = m; else b = m; }
+  const ex = x + dx * b, ez = z + dz * b, s = start ? 1 : -1; // s points from the water onto the land
+  return { at: k => ({ x: ex + dx * k * s, z: ez + dz * k * s }), toWater: Math.atan2(-dx * s, -dz * s), toLand: Math.atan2(dx * s, dz * s) };
+}`;
+// the lake shore facing town, found from the island's middle going towards town
+const TOWN_SHORE = `(${SHORE_AT})(island.x + (W / 2 - island.x) * (island.b + 1) / Math.hypot(W / 2 - island.x, W / 2 - island.z),
+  island.z + (W / 2 - island.z) * (island.b + 1) / Math.hypot(W / 2 - island.x, W / 2 - island.z), W / 2 - island.x, W / 2 - island.z)`;
+
+test('water: a lake four times as big, shaped round the mountains, with one big island in the middle', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const G = 2, x0 = Math.min(...lake.discs.map(d => d.x - d.r)), x1 = Math.max(...lake.discs.map(d => d.x + d.r));
+    const z0 = Math.min(...lake.discs.map(d => d.z - d.r)), z1 = Math.max(...lake.discs.map(d => d.z + d.r));
+    let water = 0, land = 0, cx = 0, cz = 0;
+    for (let x = x0; x < x1; x += G) for (let z = z0; z < z1; z += G) {
+      if (!inLake(x, z, 0)) continue;
+      if (onIsland(x, z, 0)) land += G * G; else { water += G * G; cx += x; cz += z; }
+    }
+    const townWet = [];
+    for (let x = -10; x <= W + 10; x += 2) for (let z = -10; z <= W + 10; z += 2) if (wet(x, z, 0)) townWet.push([x, z]);
+    const ring = [], c = Math.cos(island.yaw), s = Math.sin(island.yaw);
+    for (let k = 0; k < 64; k++) { // 30 m of open water all round the island
+      const e = k / 64 * Math.PI * 2, lx = Math.cos(e) * (island.b + 30), lz = Math.sin(e) * (island.a + 30);
+      ring.push(inWater(island.x + lx * c + lz * s, island.z - lx * s + lz * c, 0));
+    }
+    return {
+      area: water / (120 * 86), fill: (water + land) / ((x1 - x0) * (z1 - z0)), townWet, ring: ring.every(Boolean),
+      lakeToTown: Math.min(...lake.discs.map(d => townDist(d.x, d.z) - d.r - 5)),
+      onMountain: lake.discs.some(d => mountains.some(m => Math.hypot(m.x - d.x, m.z - d.z) < m.r * 1.4 + d.r)),
+      island: [island.a * 2, island.b * 2, onLand(island.x, island.z, SHORE), inWater(island.x, island.z)],
+      middle: Math.hypot(cx / (water / G / G) - island.x, cz / (water / G / G) - island.z),
+      treesInWater: solids.filter(k => k.top > 4 && wet((k.x0 + k.x1) / 2, (k.z0 + k.z1) / 2, 0) && !onIsland((k.x0 + k.x1) / 2, (k.z0 + k.z1) / 2, 0)).length,
+    };
+  });
+  expect(r.area).toBeGreaterThanOrEqual(3.5 * .96); // 4 times the old 120 x 86, measured on a 2 m grid
+  expect(r.area).toBeLessThanOrEqual(4.5);
+  expect(r.fill).toBeLessThan(.85); // not a rectangle
+  expect(r.lakeToTown).toBeGreaterThanOrEqual(20);
+  expect(r.townWet).toEqual([]); // park ponds are not boat water
+  expect(r.onMountain).toBe(false);
+  expect(r.island).toEqual([80, 56, true, false]);
+  expect(r.ring).toBe(true);
+  expect(r.middle).toBeLessThan(25);
+  expect(r.treesInWater).toBe(0);
+});
+
+test('the river is 18 m wide and loops round a mountain, out of the lake and back into it', async ({ page }) => {
   await open(page);
   const r = await page.evaluate(() => {
     let len = 0;
     for (let i = 1; i < river.length; i++) len += Math.hypot(river[i].x - river[i - 1].x, river[i].z - river[i - 1].z);
-    const townWet = [];
-    for (let x = -10; x <= W + 10; x += 2) for (let z = -10; z <= W + 10; z += 2) if (wet(x, z, 0)) townWet.push([x, z]);
-    const lakeToTown = Math.min(...[-1, 1].flatMap(sx => [-1, 1].map(sz => townDist(lake.x + sx * (LAKEW / 2 + 5), lake.z + sz * (LAKED / 2 + 5)))),
-      townDist(lake.x, lake.z) - Math.hypot(LAKEW / 2 + 5, LAKED / 2 + 5));
+    const inside = (m, poly) => { // is the mountain's middle inside the river's loop (closed across the lake)?
+      let n = 0;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const a = poly[i], b = poly[j];
+        if ((a.z > m.z) !== (b.z > m.z) && m.x < (b.x - a.x) * (m.z - a.z) / (b.z - a.z) + a.x) n++;
+      }
+      return n % 2 === 1;
+    };
+    const first = river[0], last = river[river.length - 1], mid = river.slice(2, -2);
+    let crossing = 0;
+    for (let i = 0; i < river.length; i++) for (let j = i + 4; j < river.length; j++)
+      if (Math.hypot(river[i].x - river[j].x, river[i].z - river[j].z) < RIVERW + 5) crossing++;
     return {
-      area: (LAKEW * LAKED) / (74 * 54), len, islands: islands.length, ramps: ramps.length,
-      riverToTown: Math.min(...river.map(p => townDist(p.x, p.z))) - RIVERW / 2 - 2.5, lakeToTown, townWet,
+      width: RIVERW, len, ends: [inLake(first.x, first.z, 0), inLake(last.x, last.z, 0)], apart: Math.hypot(first.x - last.x, first.z - last.z),
+      round: mountains.filter(m => inside(m, river)).length, crossing,
+      touchesLake: mid.some(p => inLake(p.x, p.z, RIVERW / 2)),
+      riverToTown: Math.min(...river.map(p => townDist(p.x, p.z))),
       riverInMountain: river.some(p => mountains.some(m => Math.hypot(m.x - p.x, m.z - p.z) < m.r * 1.4)),
-      lakeMiddle: inWater(lake.x + 25, lake.z - 30), river: inWater(river[20].x, river[20].z),
-      islandsDry: islands.map(i => inWater(i.x, i.z) || !onLand(i.x, i.z, SHORE)),
-      beach: inWater(lake.x + LAKEW / 2 + 3, lake.z), riverBank: inWater(river[20].x + RIVERW / 2 + 2, river[20].z + RIVERW / 2 + 2),
-      treesInWater: solids.filter(s => s.top > 4 && wet((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2, 0) && !onIsland((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2, 0)).length,
+      river: inWater(river[10].x, river[10].z), riverBank: inWater(river[10].x + RIVERW / 2 + 2, river[10].z + RIVERW / 2 + 2),
     };
   });
-  expect(r.area).toBeGreaterThan(2.3);
-  expect(r.area).toBeLessThan(2.8);
+  expect(r.width).toBe(18);
   expect(r.len).toBeGreaterThanOrEqual(250);
-  expect(r.len).toBeLessThanOrEqual(350);
-  expect(r.islands).toBe(3);
-  expect(r.ramps).toBeGreaterThanOrEqual(3);
-  expect(r.ramps).toBeLessThanOrEqual(4);
-  expect(r.riverToTown).toBeGreaterThanOrEqual(20);
-  expect(r.lakeToTown).toBeGreaterThanOrEqual(20);
-  expect(r.townWet).toEqual([]); // park ponds are not boat water
-  expect(r.riverInMountain).toBe(false);
-  expect(r).toMatchObject({ lakeMiddle: true, river: true, islandsDry: [false, false, false], beach: false, riverBank: false, treesInWater: 0 });
+  expect(r.len).toBeLessThanOrEqual(800);
+  expect(r.ends).toEqual([true, true]);
+  expect(r.apart).toBeGreaterThan(60);
+  expect(r.round).toBeGreaterThanOrEqual(1);
+  expect(r).toMatchObject({ crossing: 0, touchesLake: false, riverInMountain: false, river: true, riverBank: false });
+  expect(r.riverToTown).toBeGreaterThanOrEqual(34);
+});
+
+test('the island has trees well in from the beach, and rabbits and deer that run from the car', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const out = {};
+    out.trees = [islandTrees.length, islandTrees.every(t => onIsland(t.x, t.z, -10) && hits(t.x, t.z))];
+    out.animals = [animals.filter(k => !k.deer).length, animals.filter(k => k.deer).length,
+      animals.every(k => onIsland(k.x, k.z, -4) && !solids.some(s => k.x > s.x0 && k.x < s.x1 && k.z > s.z0 && k.z < s.z1))];
+    const k = animals.find(a => a.deer), home = { x: k.hx, z: k.hz }, out0 = Math.hypot(k.x - island.x, k.z - island.z) || 1;
+    // the car comes from the beach side, so the deer runs off towards the middle of the island
+    setMode('car'); Object.assign(car, { x: k.x + (k.x - island.x) / out0 * 6, z: k.z + (k.z - island.z) / out0 * 6, v: 0 });
+    for (let i = 0; i < 60; i++) updateAnimals(1 / 60);
+    out.scared = k.scared; out.fled = Math.hypot(k.x - car.x, k.z - car.z) - 6;
+    for (let i = 0; i < 60 * 10; i++) updateAnimals(1 / 60);
+    out.stayed = animals.every(a => onIsland(a.x, a.z, -4) && !islandTrees.some(t => Math.hypot(t.x - a.x, t.z - a.z) < 1.5));
+    setMode('heli');
+    for (let i = 0; i < 60 * 60; i++) { T += 1 / 60; updateAnimals(1 / 60); }
+    out.calm = [k.scared, Math.hypot(k.x - home.x, k.z - home.z) < 6];
+    setMode('car');
+    return out;
+  });
+  expect(r.trees).toEqual([12, true]);
+  expect(r.animals).toEqual([4, 3, true]);
+  expect(r.scared).toBe(true);
+  expect(r.fled).toBeGreaterThan(3);
+  expect(r.stayed).toBe(true);
+  expect(r.calm).toEqual([false, true]);
 });
 
 test('the car drives into the lake as the boat, and out again as the car', async ({ page }) => {
@@ -189,46 +272,51 @@ test('the car drives into the lake as the boat, and out again as the car', async
   const problems = await open(page);
   await page.keyboard.press('KeyX'); // start
   // on the beach, facing the water
-  await page.evaluate(() => Object.assign(car, { x: lake.x + LAKEW / 2 + 4, z: lake.z - 30, a: -Math.PI / 2, v: 0 }));
+  await page.evaluate(TOWN_SHORE => { const s = eval(TOWN_SHORE); Object.assign(car, s.at(4), { a: s.toWater, v: 0 }); }, TOWN_SHORE);
   await page.keyboard.down('ArrowUp');
   await page.waitForFunction(() => mode === 'boat', null, { timeout: 40_000 });
-  expect(await page.evaluate(() => [boat.x < lake.x + LAKEW / 2, fx.some(f => f.spray), document.getElementById('mode').textContent]))
+  expect(await page.evaluate(() => [inWater(boat.x, boat.z), fx.some(f => f.spray), document.getElementById('mode').textContent]))
     .toEqual([true, true, 'H = 🚁']);
   await page.keyboard.up('ArrowUp');
   // turn around and head for the beach
-  await page.evaluate(() => Object.assign(boat, { a: Math.PI / 2, v: 0 }));
+  await page.evaluate(TOWN_SHORE => Object.assign(boat, { a: eval(TOWN_SHORE).toLand, v: 0 }), TOWN_SHORE);
   await page.keyboard.down('ArrowUp');
   await page.waitForFunction(() => mode === 'car', null, { timeout: 40_000 });
   await page.keyboard.up('ArrowUp');
-  expect(await page.evaluate(() => onLand(car.x, car.z, SHORE) && car.x > lake.x + LAKEW / 2)).toBe(true);
+  expect(await page.evaluate(() => onLand(car.x, car.z, SHORE) && !onIsland(car.x, car.z, 0))).toBe(true);
   expect(await glError(page)).toBe(0);
   expect(problems).toEqual([]);
 });
 
-test('no flicker at the shore, and the helicopter lands as the boat over water', async ({ page }) => {
+test('no flicker at the shore or the island, and the helicopter lands as the boat over water', async ({ page }) => {
   await open(page);
-  const r = await page.evaluate(() => {
-    const edge = lake.x + LAKEW / 2, z = lake.z - 30, out = {};
-    // standing still just inside the water, the car stays a car; just up the beach, the boat stays a boat
-    setMode('car'); Object.assign(car, { x: edge - 1, z, v: 0 }); driveCar(1 / 60); out.carJustIn = mode;
-    Object.assign(car, { x: edge - 2, z, v: 0 }); driveCar(1 / 60); out.carIn = mode;
-    Object.assign(boat, { x: edge + 1, z, v: 0, hop: 0, vy: 0 }); driveBoat(1 / 60); out.boatJustOut = mode;
-    Object.assign(boat, { x: edge + 2, z, v: 0 }); driveBoat(1 / 60); out.boatOut = mode;
-    // helicopter over the lake and over the river lands as the boat, over the beach as the car on dry land
-    setMode('heli'); Object.assign(heli, { x: lake.x + 25, z: lake.z - 30 }); switchVehicle(); out.heliLake = [mode, boat.x, boat.z];
-    setMode('heli'); Object.assign(heli, { x: river[20].x, z: river[20].z }); switchVehicle(); out.heliRiver = mode;
-    setMode('heli'); Object.assign(heli, { x: edge + 1, z }); switchVehicle(); out.heliBeach = [mode, onLand(car.x, car.z, SHORE)];
+  const r = await page.evaluate(([SHORE_AT, TOWN_SHORE]) => {
+    const out = {}, shoreAt = eval(SHORE_AT);
+    for (const [name, s] of [['lake', eval(TOWN_SHORE)], ['island', shoreAt(island.x, island.z, 1, .3)]]) {
+      // standing still just inside the water, the car stays a car; just up the beach, the boat stays a boat
+      setMode('car'); Object.assign(car, s.at(-1), { v: 0 }); driveCar(1 / 60); const carJustIn = mode;
+      Object.assign(car, s.at(-2), { v: 0 }); driveCar(1 / 60); const carIn = mode;
+      Object.assign(boat, s.at(1), { v: 0, hop: 0, vy: 0 }); driveBoat(1 / 60); const boatJustOut = mode;
+      Object.assign(boat, s.at(2), { v: 0 }); driveBoat(1 / 60); const boatOut = mode;
+      out[name] = [carJustIn, carIn, boatJustOut, boatOut];
+    }
+    // helicopter over the lake and over the river lands as the boat, over the beach and the island as the car on dry land
+    const lakeMid = shoreAt(island.x, island.z, 1, .3).at(-15);
+    setMode('heli'); Object.assign(heli, lakeMid); switchVehicle(); out.heliLake = mode;
+    setMode('heli'); Object.assign(heli, { x: river[10].x, z: river[10].z }); switchVehicle(); out.heliRiver = mode;
+    setMode('heli'); Object.assign(heli, eval(TOWN_SHORE).at(1)); switchVehicle(); out.heliBeach = [mode, onLand(car.x, car.z, SHORE)];
+    setMode('heli'); Object.assign(heli, { x: island.x + 5, z: island.z }); switchVehicle(); out.heliIsland = [mode, onIsland(car.x, car.z, 0)];
     setMode('car');
     return out;
-  });
-  expect(r).toEqual({ carJustIn: 'car', carIn: 'boat', boatJustOut: 'boat', boatOut: 'car',
-    heliLake: ['boat', expect.any(Number), expect.any(Number)], heliRiver: 'boat', heliBeach: ['car', true] });
+  }, [SHORE_AT, TOWN_SHORE]);
+  expect(r).toEqual({ lake: ['car', 'boat', 'boat', 'car'], island: ['car', 'boat', 'boat', 'car'],
+    heliLake: 'boat', heliRiver: 'boat', heliBeach: ['car', true], heliIsland: ['car', true] });
 });
 
 test('the speedboat tops out at 28, glides when you let go, and only it catches water stars', async ({ page }) => {
   await open(page);
-  const r = await page.evaluate(() => {
-    const mid = { x: lake.x + 25, z: lake.z - 30 }, out = {};
+  const r = await page.evaluate(([SHORE_AT, TOWN_SHORE]) => {
+    const mid = eval(SHORE_AT)(island.x, island.z, 1, .3).at(-15), out = {};
     setMode('boat'); Object.assign(boat, { ...mid, a: 0, v: 0, hop: 0, vy: 0 });
     keys.add('ArrowUp');
     for (let i = 0; i < 600; i++) { driveBoat(1 / 60); Object.assign(boat, mid); }
@@ -237,9 +325,10 @@ test('the speedboat tops out at 28, glides when you let go, and only it catches 
     for (let i = 0; i < 60; i++) { driveBoat(1 / 60); Object.assign(boat, mid); }
     out.afterGlide = boat.v; // the car keeps only 35% after a second, the boat 60%
     const w = stars.filter(s => s.water);
-    out.water = [w.length, w.every(s => inWater(s.x, s.z, 4) && !ramps.some(r => Math.hypot(r.x - s.x, r.z - s.z) < r.r))];
+    out.water = [w.length, w.every(s => inWater(s.x, s.z, 4) && !ramps.some(r => Math.hypot(r.x - s.x, r.z - s.z) < r.r)),
+      w.some(s => inLake(s.x, s.z, 0)), w.some(s => !inLake(s.x, s.z, 0))];
     // a water star under the car (on the beach) stays put, under the boat it is caught and comes back on the water
-    const i = stars.indexOf(w[0]), before = score, beach = { x: lake.x + LAKEW / 2 + 4, z: lake.z - 30 };
+    const i = stars.indexOf(w[0]), before = score, beach = eval(TOWN_SHORE).at(4);
     setMode('car'); Object.assign(car, beach, { v: 0 }); Object.assign(stars[i], beach); update(1 / 60);
     out.carCatch = [mode, score - before];
     Object.assign(stars[i], mid);
@@ -248,42 +337,87 @@ test('the speedboat tops out at 28, glides when you let go, and only it catches 
     out.respawn = [stars[i].water, inWater(stars[i].x, stars[i].z, 4), Math.hypot(stars[i].x - boat.x, stars[i].z - boat.z) > 40];
     setMode('car');
     return out;
-  });
+  }, [SHORE_AT, TOWN_SHORE]);
   expect(r.top).toBe(28);
   expect(r.afterGlide).toBeCloseTo(28 * 0.6, 0);
-  expect(r).toMatchObject({ water: [6, true], carCatch: ['car', 0], boatCatch: 1, respawn: [true, true, true] });
+  expect(r).toMatchObject({ water: [10, true, true, true], carCatch: ['car', 0], boatCatch: 1, respawn: [true, true, true] });
 });
 
-test('wave ramps make a fast boat hop and a slow one bump; ducks scatter and come back', async ({ page }) => {
+test('ramps: 3 on the river, 3 small and 2 big in the lake; big ones throw higher and land with a ring of spray', async ({ page }) => {
   await open(page);
   const r = await page.evaluate(() => {
-    const ramp = ramps[0], out = {};
-    const run = v => { // aim at the ramp from 12 away and keep the speed up
+    const out = {}, calls = [], realSplash = splash;
+    splash = (...a) => { calls.push(a[3] === true); realSplash(...a); };
+    const run = (ramp, v) => { // aim at the ramp from 12 away and keep the speed up, but stay just past it on open water
       setMode('boat');
-      Object.assign(boat, { x: ramp.x - 12, z: ramp.z, a: Math.PI / 2, v, hop: 0, vy: 0, onRamp: false });
-      let top = 0;
-      for (let i = 0; i < 240; i++) { boat.v = v; driveBoat(1 / 60); top = Math.max(top, boat.hop); }
-      return top;
+      Object.assign(boat, { x: ramp.x - 12, z: ramp.z, a: Math.PI / 2, v, hop: 0, vy: 0, onRamp: false, big: false });
+      let top = 0; calls.length = 0;
+      for (let i = 0; i < 240; i++) {
+        boat.v = v; driveBoat(1 / 60); top = Math.max(top, boat.hop);
+        boat.x = Math.min(boat.x, ramp.x + ramp.r + 1);
+      }
+      return [top, calls.some(Boolean)];
     };
-    out.fast = run(26); out.slow = run(5);
+    const onRiver = ramps.filter(k => k.river), inLakeRamps = ramps.filter(k => !k.river);
+    out.counts = [onRiver.length, inLakeRamps.filter(k => !k.big).length, inLakeRamps.filter(k => k.big).length];
+    out.placed = [onRiver.every(k => riverDist(k.x, k.z) < 3 && !inLake(k.x, k.z, 0)), inLakeRamps.every(k => inWater(k.x, k.z, k.r + 8)),
+      ramps.every(a => ramps.every(b => a === b || Math.hypot(a.x - b.x, a.z - b.z) >= 24))];
+    const small = inLakeRamps.find(k => !k.big), big = inLakeRamps.find(k => k.big);
+    [out.fast, out.smallRing] = run(small, 26); [out.big, out.bigRing] = run(big, 26);
+    out.slow = run(small, 5)[0];
     out.landed = boat.hop;
-    const d = ducks[0], start = { x: d.x, z: d.z };
+    splash = realSplash;
+    return out;
+  });
+  expect(r.counts).toEqual([3, 3, 2]);
+  expect(r.placed).toEqual([true, true, true]);
+  expect(r.fast).toBeGreaterThan(1.5);
+  expect(r.big / r.fast).toBeGreaterThan(1.35);
+  expect(r.big / r.fast).toBeLessThan(1.65);
+  expect([r.smallRing, r.bigRing]).toEqual([false, true]);
+  expect(r.slow).toBeGreaterThan(0);
+  expect(r.slow).toBeLessThan(.3);
+  expect(r.landed).toBe(0);
+});
+
+test('a fast boat leaves a foam trail that fades, never more than 40 patches', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(SHORE_AT => {
+    const mid = eval(SHORE_AT)(island.x, island.z, 1, .3).at(-15), out = {}, foam = () => fx.filter(f => f.foam).length;
+    setMode('boat'); fx.length = 0;
+    const go = (v, secs) => { for (let i = 0; i < secs * 60; i++) { Object.assign(boat, mid, { v, hop: 0, vy: 0, a: 0 }); updateFx(1 / 60); } };
+    go(8, 2); out.slow = foam();
+    go(26, 1); out.fast = foam();
+    go(26, 10); out.most = foam();
+    go(0, 2.1); out.after = foam();
+    setMode('car');
+    return out;
+  }, SHORE_AT);
+  expect(r.slow).toBe(0);
+  expect(r.fast).toBeGreaterThanOrEqual(8);
+  expect(r.most).toBeLessThanOrEqual(40);
+  expect(r.after).toBe(0);
+});
+
+test('ducks paddle on the lake and the river, scatter and come back', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const out = {};
+    out.count = [ducks.length, ducks.some(d => inLake(d.x, d.z, 0)), ducks.some(d => !inLake(d.x, d.z, 0))];
+    const d = ducks.find(k => inLake(k.x, k.z, -10)), start = { x: d.x, z: d.z };
     setMode('boat'); Object.assign(boat, { x: d.x + 6, z: d.z, v: 0 });
     for (let i = 0; i < 60; i++) updateDucks(1 / 60);
     out.scared = d.scared; out.fled = Math.hypot(d.x - boat.x, d.z - boat.z) - 6;
-    out.inLake = ducks.every(k => inLake(k.x, k.z, 0) && inWater(k.x, k.z, 1));
+    out.inWater = ducks.every(k => inWater(k.x, k.z, 1));
     setMode('car');
     for (let i = 0; i < 60 * 60; i++) updateDucks(1 / 60);
     out.home = Math.hypot(d.x - start.x, d.z - start.z);
     return out;
   });
-  expect(r.fast).toBeGreaterThan(1.5);
-  expect(r.slow).toBeGreaterThan(0);
-  expect(r.slow).toBeLessThan(.3);
-  expect(r.landed).toBe(0);
+  expect(r.count).toEqual([10, true, true]);
   expect(r.scared).toBe(true);
   expect(r.fled).toBeGreaterThan(3);
-  expect(r.inLake).toBe(true);
+  expect(r.inWater).toBe(true);
   expect(r.home).toBeLessThan(1.5);
 });
 
@@ -799,9 +933,10 @@ test('H climbs into the machine next to the car and back out; the badge and help
     piles.splice(0); blocks.splice(0); // nothing in the way of the car
     for (const m of machines) {
       let spot = null;
-      for (let k = 0; k < 16 && !spot; k++) {
+      for (let k = 0; k < 16 && !spot; k++) { // a free spot where this machine, not a neighbour, is the nearest
         const x = m.x + Math.cos(k * .4) * (m.r + 2.6), z = m.z + Math.sin(k * .4) * (m.r + 2.6);
-        if (!hits(x, z)) spot = { x, z };
+        setMode('car'); Object.assign(car, { x, z });
+        if (!hits(x, z) && nearMachine() === m) spot = { x, z };
       }
       setMode('car'); Object.assign(car, spot, { v: 0 }); refreshHud();
       out[m.kind] = [badge(), help()];
