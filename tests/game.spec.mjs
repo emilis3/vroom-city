@@ -33,9 +33,12 @@ test('loads, draws frames and needs nothing from the network', async ({ page }) 
 test('town, collisions and stars are exactly where they were before', async ({ page }) => {
   await open(page);
   const now = await page.evaluate(() => ({ stars, solids: solids.slice(0, station.firstSolid), mountains: mountains.map(m => ({ x: m.x, z: m.z, r: m.r, h: m.h })), lake }));
-  // only the few countryside trees where the launch station now stands are gone
-  const kept = await page.evaluate(all => all.filter(s => !inStationArea((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2, 3)), LAYOUT.solids);
-  expect(LAYOUT.solids.length - kept.length).toBeLessThan(15);
+  // only the few countryside trees where the launch station and the construction site now stand are gone
+  const kept = await page.evaluate(all => all.filter(s => {
+    const x = (s.x0 + s.x1) / 2, z = (s.z0 + s.z1) / 2;
+    return !inStationArea(x, z, 3) && !inSiteArea(x, z, 3);
+  }), LAYOUT.solids);
+  expect(LAYOUT.solids.length - kept.length).toBeLessThan(30);
   expect(now.solids).toEqual(kept);
   expect(now.mountains).toEqual(LAYOUT.mountains);
   expect(now.lake).toEqual(LAYOUT.lake);
@@ -145,39 +148,122 @@ test('driving, flying and collecting a star still work, with the new effects', a
   expect(problems).toEqual([]);
 });
 
-// ---------- Boat (#4) ----------
+// ---------- Boat (#4, #17) ----------
 
-test('water: bigger lake with islands and ramps, a long winding river, nothing in town', async ({ page }) => {
+// In the page: where the water ends going from (x, z) in direction (dx, dz), and a short way either side of that edge.
+// t > 0 is on the land side, t < 0 on the water side. From the island's middle outwards it finds the island's beach.
+const SHORE_AT = `(x, z, dx, dz) => {
+  const l = Math.hypot(dx, dz); dx /= l; dz /= l;
+  const start = inWater(x, z, 0);
+  let t = 0; while (inWater(x + dx * t, z + dz * t, 0) === start) t += .5;
+  let a = t - .5, b = t; for (let i = 0; i < 30; i++) { const m = (a + b) / 2; if (inWater(x + dx * m, z + dz * m, 0) === start) a = m; else b = m; }
+  const ex = x + dx * b, ez = z + dz * b, s = start ? 1 : -1; // s points from the water onto the land
+  return { at: k => ({ x: ex + dx * k * s, z: ez + dz * k * s }), toWater: Math.atan2(-dx * s, -dz * s), toLand: Math.atan2(dx * s, dz * s) };
+}`;
+// the lake shore facing town, found from the island's middle going towards town
+const TOWN_SHORE = `(${SHORE_AT})(island.x + (W / 2 - island.x) * (island.b + 1) / Math.hypot(W / 2 - island.x, W / 2 - island.z),
+  island.z + (W / 2 - island.z) * (island.b + 1) / Math.hypot(W / 2 - island.x, W / 2 - island.z), W / 2 - island.x, W / 2 - island.z)`;
+
+test('water: a lake four times as big, shaped round the mountains, with one big island in the middle', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const G = 2, x0 = Math.min(...lake.discs.map(d => d.x - d.r)), x1 = Math.max(...lake.discs.map(d => d.x + d.r));
+    const z0 = Math.min(...lake.discs.map(d => d.z - d.r)), z1 = Math.max(...lake.discs.map(d => d.z + d.r));
+    let water = 0, land = 0, cx = 0, cz = 0;
+    for (let x = x0; x < x1; x += G) for (let z = z0; z < z1; z += G) {
+      if (!inLake(x, z, 0)) continue;
+      if (onIsland(x, z, 0)) land += G * G; else { water += G * G; cx += x; cz += z; }
+    }
+    const townWet = [];
+    for (let x = -10; x <= W + 10; x += 2) for (let z = -10; z <= W + 10; z += 2) if (wet(x, z, 0)) townWet.push([x, z]);
+    const ring = [], c = Math.cos(island.yaw), s = Math.sin(island.yaw);
+    for (let k = 0; k < 64; k++) { // 30 m of open water all round the island
+      const e = k / 64 * Math.PI * 2, lx = Math.cos(e) * (island.b + 30), lz = Math.sin(e) * (island.a + 30);
+      ring.push(inWater(island.x + lx * c + lz * s, island.z - lx * s + lz * c, 0));
+    }
+    return {
+      area: water / (120 * 86), fill: (water + land) / ((x1 - x0) * (z1 - z0)), townWet, ring: ring.every(Boolean),
+      lakeToTown: Math.min(...lake.discs.map(d => townDist(d.x, d.z) - d.r - 5)),
+      onMountain: lake.discs.some(d => mountains.some(m => Math.hypot(m.x - d.x, m.z - d.z) < m.r * 1.4 + d.r)),
+      island: [island.a * 2, island.b * 2, onLand(island.x, island.z, SHORE), inWater(island.x, island.z)],
+      middle: Math.hypot(cx / (water / G / G) - island.x, cz / (water / G / G) - island.z),
+      treesInWater: solids.filter(k => k.top > 4 && wet((k.x0 + k.x1) / 2, (k.z0 + k.z1) / 2, 0) && !onIsland((k.x0 + k.x1) / 2, (k.z0 + k.z1) / 2, 0)).length,
+    };
+  });
+  expect(r.area).toBeGreaterThanOrEqual(3.5 * .96); // 4 times the old 120 x 86, measured on a 2 m grid
+  expect(r.area).toBeLessThanOrEqual(4.5);
+  expect(r.fill).toBeLessThan(.85); // not a rectangle
+  expect(r.lakeToTown).toBeGreaterThanOrEqual(20);
+  expect(r.townWet).toEqual([]); // park ponds are not boat water
+  expect(r.onMountain).toBe(false);
+  expect(r.island).toEqual([80, 56, true, false]);
+  expect(r.ring).toBe(true);
+  expect(r.middle).toBeLessThan(25);
+  expect(r.treesInWater).toBe(0);
+});
+
+test('the river is 18 m wide and loops round a mountain, out of the lake and back into it', async ({ page }) => {
   await open(page);
   const r = await page.evaluate(() => {
     let len = 0;
     for (let i = 1; i < river.length; i++) len += Math.hypot(river[i].x - river[i - 1].x, river[i].z - river[i - 1].z);
-    const townWet = [];
-    for (let x = -10; x <= W + 10; x += 2) for (let z = -10; z <= W + 10; z += 2) if (wet(x, z, 0)) townWet.push([x, z]);
-    const lakeToTown = Math.min(...[-1, 1].flatMap(sx => [-1, 1].map(sz => townDist(lake.x + sx * (LAKEW / 2 + 5), lake.z + sz * (LAKED / 2 + 5)))),
-      townDist(lake.x, lake.z) - Math.hypot(LAKEW / 2 + 5, LAKED / 2 + 5));
+    const inside = (m, poly) => { // is the mountain's middle inside the river's loop (closed across the lake)?
+      let n = 0;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const a = poly[i], b = poly[j];
+        if ((a.z > m.z) !== (b.z > m.z) && m.x < (b.x - a.x) * (m.z - a.z) / (b.z - a.z) + a.x) n++;
+      }
+      return n % 2 === 1;
+    };
+    const first = river[0], last = river[river.length - 1], mid = river.slice(2, -2);
+    let crossing = 0;
+    for (let i = 0; i < river.length; i++) for (let j = i + 4; j < river.length; j++)
+      if (Math.hypot(river[i].x - river[j].x, river[i].z - river[j].z) < RIVERW + 5) crossing++;
     return {
-      area: (LAKEW * LAKED) / (74 * 54), len, islands: islands.length, ramps: ramps.length,
-      riverToTown: Math.min(...river.map(p => townDist(p.x, p.z))) - RIVERW / 2 - 2.5, lakeToTown, townWet,
+      width: RIVERW, len, ends: [inLake(first.x, first.z, 0), inLake(last.x, last.z, 0)], apart: Math.hypot(first.x - last.x, first.z - last.z),
+      round: mountains.filter(m => inside(m, river)).length, crossing,
+      touchesLake: mid.some(p => inLake(p.x, p.z, RIVERW / 2)),
+      riverToTown: Math.min(...river.map(p => townDist(p.x, p.z))),
       riverInMountain: river.some(p => mountains.some(m => Math.hypot(m.x - p.x, m.z - p.z) < m.r * 1.4)),
-      lakeMiddle: inWater(lake.x + 25, lake.z - 30), river: inWater(river[20].x, river[20].z),
-      islandsDry: islands.map(i => inWater(i.x, i.z) || !onLand(i.x, i.z, SHORE)),
-      beach: inWater(lake.x + LAKEW / 2 + 3, lake.z), riverBank: inWater(river[20].x + RIVERW / 2 + 2, river[20].z + RIVERW / 2 + 2),
-      treesInWater: solids.filter(s => s.top > 4 && wet((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2, 0) && !onIsland((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2, 0)).length,
+      river: inWater(river[10].x, river[10].z), riverBank: inWater(river[10].x + RIVERW / 2 + 2, river[10].z + RIVERW / 2 + 2),
     };
   });
-  expect(r.area).toBeGreaterThan(2.3);
-  expect(r.area).toBeLessThan(2.8);
+  expect(r.width).toBe(18);
   expect(r.len).toBeGreaterThanOrEqual(250);
-  expect(r.len).toBeLessThanOrEqual(350);
-  expect(r.islands).toBe(3);
-  expect(r.ramps).toBeGreaterThanOrEqual(3);
-  expect(r.ramps).toBeLessThanOrEqual(4);
-  expect(r.riverToTown).toBeGreaterThanOrEqual(20);
-  expect(r.lakeToTown).toBeGreaterThanOrEqual(20);
-  expect(r.townWet).toEqual([]); // park ponds are not boat water
-  expect(r.riverInMountain).toBe(false);
-  expect(r).toMatchObject({ lakeMiddle: true, river: true, islandsDry: [false, false, false], beach: false, riverBank: false, treesInWater: 0 });
+  expect(r.len).toBeLessThanOrEqual(800);
+  expect(r.ends).toEqual([true, true]);
+  expect(r.apart).toBeGreaterThan(60);
+  expect(r.round).toBeGreaterThanOrEqual(1);
+  expect(r).toMatchObject({ crossing: 0, touchesLake: false, riverInMountain: false, river: true, riverBank: false });
+  expect(r.riverToTown).toBeGreaterThanOrEqual(34);
+});
+
+test('the island has trees well in from the beach, and rabbits and deer that run from the car', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const out = {};
+    out.trees = [islandTrees.length, islandTrees.every(t => onIsland(t.x, t.z, -10) && hits(t.x, t.z))];
+    out.animals = [animals.filter(k => !k.deer).length, animals.filter(k => k.deer).length,
+      animals.every(k => onIsland(k.x, k.z, -4) && !solids.some(s => k.x > s.x0 && k.x < s.x1 && k.z > s.z0 && k.z < s.z1))];
+    const k = animals.find(a => a.deer), home = { x: k.hx, z: k.hz }, out0 = Math.hypot(k.x - island.x, k.z - island.z) || 1;
+    // the car comes from the beach side, so the deer runs off towards the middle of the island
+    setMode('car'); Object.assign(car, { x: k.x + (k.x - island.x) / out0 * 6, z: k.z + (k.z - island.z) / out0 * 6, v: 0 });
+    for (let i = 0; i < 60; i++) updateAnimals(1 / 60);
+    out.scared = k.scared; out.fled = Math.hypot(k.x - car.x, k.z - car.z) - 6;
+    for (let i = 0; i < 60 * 10; i++) updateAnimals(1 / 60);
+    out.stayed = animals.every(a => onIsland(a.x, a.z, -4) && !islandTrees.some(t => Math.hypot(t.x - a.x, t.z - a.z) < 1.5));
+    setMode('heli');
+    for (let i = 0; i < 60 * 60; i++) { T += 1 / 60; updateAnimals(1 / 60); }
+    out.calm = [k.scared, Math.hypot(k.x - home.x, k.z - home.z) < 6];
+    setMode('car');
+    return out;
+  });
+  expect(r.trees).toEqual([12, true]);
+  expect(r.animals).toEqual([4, 3, true]);
+  expect(r.scared).toBe(true);
+  expect(r.fled).toBeGreaterThan(3);
+  expect(r.stayed).toBe(true);
+  expect(r.calm).toEqual([false, true]);
 });
 
 test('the car drives into the lake as the boat, and out again as the car', async ({ page }) => {
@@ -186,46 +272,51 @@ test('the car drives into the lake as the boat, and out again as the car', async
   const problems = await open(page);
   await page.keyboard.press('KeyX'); // start
   // on the beach, facing the water
-  await page.evaluate(() => Object.assign(car, { x: lake.x + LAKEW / 2 + 4, z: lake.z - 30, a: -Math.PI / 2, v: 0 }));
+  await page.evaluate(TOWN_SHORE => { const s = eval(TOWN_SHORE); Object.assign(car, s.at(4), { a: s.toWater, v: 0 }); }, TOWN_SHORE);
   await page.keyboard.down('ArrowUp');
   await page.waitForFunction(() => mode === 'boat', null, { timeout: 40_000 });
-  expect(await page.evaluate(() => [boat.x < lake.x + LAKEW / 2, fx.some(f => f.spray), document.getElementById('mode').textContent]))
+  expect(await page.evaluate(() => [inWater(boat.x, boat.z), fx.some(f => f.spray), document.getElementById('mode').textContent]))
     .toEqual([true, true, 'H = 🚁']);
   await page.keyboard.up('ArrowUp');
   // turn around and head for the beach
-  await page.evaluate(() => Object.assign(boat, { a: Math.PI / 2, v: 0 }));
+  await page.evaluate(TOWN_SHORE => Object.assign(boat, { a: eval(TOWN_SHORE).toLand, v: 0 }), TOWN_SHORE);
   await page.keyboard.down('ArrowUp');
   await page.waitForFunction(() => mode === 'car', null, { timeout: 40_000 });
   await page.keyboard.up('ArrowUp');
-  expect(await page.evaluate(() => onLand(car.x, car.z, SHORE) && car.x > lake.x + LAKEW / 2)).toBe(true);
+  expect(await page.evaluate(() => onLand(car.x, car.z, SHORE) && !onIsland(car.x, car.z, 0))).toBe(true);
   expect(await glError(page)).toBe(0);
   expect(problems).toEqual([]);
 });
 
-test('no flicker at the shore, and the helicopter lands as the boat over water', async ({ page }) => {
+test('no flicker at the shore or the island, and the helicopter lands as the boat over water', async ({ page }) => {
   await open(page);
-  const r = await page.evaluate(() => {
-    const edge = lake.x + LAKEW / 2, z = lake.z - 30, out = {};
-    // standing still just inside the water, the car stays a car; just up the beach, the boat stays a boat
-    setMode('car'); Object.assign(car, { x: edge - 1, z, v: 0 }); driveCar(1 / 60); out.carJustIn = mode;
-    Object.assign(car, { x: edge - 2, z, v: 0 }); driveCar(1 / 60); out.carIn = mode;
-    Object.assign(boat, { x: edge + 1, z, v: 0, hop: 0, vy: 0 }); driveBoat(1 / 60); out.boatJustOut = mode;
-    Object.assign(boat, { x: edge + 2, z, v: 0 }); driveBoat(1 / 60); out.boatOut = mode;
-    // helicopter over the lake and over the river lands as the boat, over the beach as the car on dry land
-    setMode('heli'); Object.assign(heli, { x: lake.x + 25, z: lake.z - 30 }); switchVehicle(); out.heliLake = [mode, boat.x, boat.z];
-    setMode('heli'); Object.assign(heli, { x: river[20].x, z: river[20].z }); switchVehicle(); out.heliRiver = mode;
-    setMode('heli'); Object.assign(heli, { x: edge + 1, z }); switchVehicle(); out.heliBeach = [mode, onLand(car.x, car.z, SHORE)];
+  const r = await page.evaluate(([SHORE_AT, TOWN_SHORE]) => {
+    const out = {}, shoreAt = eval(SHORE_AT);
+    for (const [name, s] of [['lake', eval(TOWN_SHORE)], ['island', shoreAt(island.x, island.z, 1, .3)]]) {
+      // standing still just inside the water, the car stays a car; just up the beach, the boat stays a boat
+      setMode('car'); Object.assign(car, s.at(-1), { v: 0 }); driveCar(1 / 60); const carJustIn = mode;
+      Object.assign(car, s.at(-2), { v: 0 }); driveCar(1 / 60); const carIn = mode;
+      Object.assign(boat, s.at(1), { v: 0, hop: 0, vy: 0 }); driveBoat(1 / 60); const boatJustOut = mode;
+      Object.assign(boat, s.at(2), { v: 0 }); driveBoat(1 / 60); const boatOut = mode;
+      out[name] = [carJustIn, carIn, boatJustOut, boatOut];
+    }
+    // helicopter over the lake and over the river lands as the boat, over the beach and the island as the car on dry land
+    const lakeMid = shoreAt(island.x, island.z, 1, .3).at(-15);
+    setMode('heli'); Object.assign(heli, lakeMid); switchVehicle(); out.heliLake = mode;
+    setMode('heli'); Object.assign(heli, { x: river[10].x, z: river[10].z }); switchVehicle(); out.heliRiver = mode;
+    setMode('heli'); Object.assign(heli, eval(TOWN_SHORE).at(1)); switchVehicle(); out.heliBeach = [mode, onLand(car.x, car.z, SHORE)];
+    setMode('heli'); Object.assign(heli, { x: island.x + 5, z: island.z }); switchVehicle(); out.heliIsland = [mode, onIsland(car.x, car.z, 0)];
     setMode('car');
     return out;
-  });
-  expect(r).toEqual({ carJustIn: 'car', carIn: 'boat', boatJustOut: 'boat', boatOut: 'car',
-    heliLake: ['boat', expect.any(Number), expect.any(Number)], heliRiver: 'boat', heliBeach: ['car', true] });
+  }, [SHORE_AT, TOWN_SHORE]);
+  expect(r).toEqual({ lake: ['car', 'boat', 'boat', 'car'], island: ['car', 'boat', 'boat', 'car'],
+    heliLake: 'boat', heliRiver: 'boat', heliBeach: ['car', true], heliIsland: ['car', true] });
 });
 
 test('the speedboat tops out at 28, glides when you let go, and only it catches water stars', async ({ page }) => {
   await open(page);
-  const r = await page.evaluate(() => {
-    const mid = { x: lake.x + 25, z: lake.z - 30 }, out = {};
+  const r = await page.evaluate(([SHORE_AT, TOWN_SHORE]) => {
+    const mid = eval(SHORE_AT)(island.x, island.z, 1, .3).at(-15), out = {};
     setMode('boat'); Object.assign(boat, { ...mid, a: 0, v: 0, hop: 0, vy: 0 });
     keys.add('ArrowUp');
     for (let i = 0; i < 600; i++) { driveBoat(1 / 60); Object.assign(boat, mid); }
@@ -234,9 +325,10 @@ test('the speedboat tops out at 28, glides when you let go, and only it catches 
     for (let i = 0; i < 60; i++) { driveBoat(1 / 60); Object.assign(boat, mid); }
     out.afterGlide = boat.v; // the car keeps only 35% after a second, the boat 60%
     const w = stars.filter(s => s.water);
-    out.water = [w.length, w.every(s => inWater(s.x, s.z, 4) && !ramps.some(r => Math.hypot(r.x - s.x, r.z - s.z) < r.r))];
+    out.water = [w.length, w.every(s => inWater(s.x, s.z, 4) && !ramps.some(r => Math.hypot(r.x - s.x, r.z - s.z) < r.r)),
+      w.some(s => inLake(s.x, s.z, 0)), w.some(s => !inLake(s.x, s.z, 0))];
     // a water star under the car (on the beach) stays put, under the boat it is caught and comes back on the water
-    const i = stars.indexOf(w[0]), before = score, beach = { x: lake.x + LAKEW / 2 + 4, z: lake.z - 30 };
+    const i = stars.indexOf(w[0]), before = score, beach = eval(TOWN_SHORE).at(4);
     setMode('car'); Object.assign(car, beach, { v: 0 }); Object.assign(stars[i], beach); update(1 / 60);
     out.carCatch = [mode, score - before];
     Object.assign(stars[i], mid);
@@ -245,42 +337,87 @@ test('the speedboat tops out at 28, glides when you let go, and only it catches 
     out.respawn = [stars[i].water, inWater(stars[i].x, stars[i].z, 4), Math.hypot(stars[i].x - boat.x, stars[i].z - boat.z) > 40];
     setMode('car');
     return out;
-  });
+  }, [SHORE_AT, TOWN_SHORE]);
   expect(r.top).toBe(28);
   expect(r.afterGlide).toBeCloseTo(28 * 0.6, 0);
-  expect(r).toMatchObject({ water: [6, true], carCatch: ['car', 0], boatCatch: 1, respawn: [true, true, true] });
+  expect(r).toMatchObject({ water: [10, true, true, true], carCatch: ['car', 0], boatCatch: 1, respawn: [true, true, true] });
 });
 
-test('wave ramps make a fast boat hop and a slow one bump; ducks scatter and come back', async ({ page }) => {
+test('ramps: 3 on the river, 3 small and 2 big in the lake; big ones throw higher and land with a ring of spray', async ({ page }) => {
   await open(page);
   const r = await page.evaluate(() => {
-    const ramp = ramps[0], out = {};
-    const run = v => { // aim at the ramp from 12 away and keep the speed up
+    const out = {}, calls = [], realSplash = splash;
+    splash = (...a) => { calls.push(a[3] === true); realSplash(...a); };
+    const run = (ramp, v) => { // aim at the ramp from 12 away and keep the speed up, but stay just past it on open water
       setMode('boat');
-      Object.assign(boat, { x: ramp.x - 12, z: ramp.z, a: Math.PI / 2, v, hop: 0, vy: 0, onRamp: false });
-      let top = 0;
-      for (let i = 0; i < 240; i++) { boat.v = v; driveBoat(1 / 60); top = Math.max(top, boat.hop); }
-      return top;
+      Object.assign(boat, { x: ramp.x - 12, z: ramp.z, a: Math.PI / 2, v, hop: 0, vy: 0, onRamp: false, big: false });
+      let top = 0; calls.length = 0;
+      for (let i = 0; i < 240; i++) {
+        boat.v = v; driveBoat(1 / 60); top = Math.max(top, boat.hop);
+        boat.x = Math.min(boat.x, ramp.x + ramp.r + 1);
+      }
+      return [top, calls.some(Boolean)];
     };
-    out.fast = run(26); out.slow = run(5);
+    const onRiver = ramps.filter(k => k.river), inLakeRamps = ramps.filter(k => !k.river);
+    out.counts = [onRiver.length, inLakeRamps.filter(k => !k.big).length, inLakeRamps.filter(k => k.big).length];
+    out.placed = [onRiver.every(k => riverDist(k.x, k.z) < 3 && !inLake(k.x, k.z, 0)), inLakeRamps.every(k => inWater(k.x, k.z, k.r + 8)),
+      ramps.every(a => ramps.every(b => a === b || Math.hypot(a.x - b.x, a.z - b.z) >= 24))];
+    const small = inLakeRamps.find(k => !k.big), big = inLakeRamps.find(k => k.big);
+    [out.fast, out.smallRing] = run(small, 26); [out.big, out.bigRing] = run(big, 26);
+    out.slow = run(small, 5)[0];
     out.landed = boat.hop;
-    const d = ducks[0], start = { x: d.x, z: d.z };
+    splash = realSplash;
+    return out;
+  });
+  expect(r.counts).toEqual([3, 3, 2]);
+  expect(r.placed).toEqual([true, true, true]);
+  expect(r.fast).toBeGreaterThan(1.5);
+  expect(r.big / r.fast).toBeGreaterThan(1.35);
+  expect(r.big / r.fast).toBeLessThan(1.65);
+  expect([r.smallRing, r.bigRing]).toEqual([false, true]);
+  expect(r.slow).toBeGreaterThan(0);
+  expect(r.slow).toBeLessThan(.3);
+  expect(r.landed).toBe(0);
+});
+
+test('a fast boat leaves a foam trail that fades, never more than 40 patches', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(SHORE_AT => {
+    const mid = eval(SHORE_AT)(island.x, island.z, 1, .3).at(-15), out = {}, foam = () => fx.filter(f => f.foam).length;
+    setMode('boat'); fx.length = 0;
+    const go = (v, secs) => { for (let i = 0; i < secs * 60; i++) { Object.assign(boat, mid, { v, hop: 0, vy: 0, a: 0 }); updateFx(1 / 60); } };
+    go(8, 2); out.slow = foam();
+    go(26, 1); out.fast = foam();
+    go(26, 10); out.most = foam();
+    go(0, 2.1); out.after = foam();
+    setMode('car');
+    return out;
+  }, SHORE_AT);
+  expect(r.slow).toBe(0);
+  expect(r.fast).toBeGreaterThanOrEqual(8);
+  expect(r.most).toBeLessThanOrEqual(40);
+  expect(r.after).toBe(0);
+});
+
+test('ducks paddle on the lake and the river, scatter and come back', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const out = {};
+    out.count = [ducks.length, ducks.some(d => inLake(d.x, d.z, 0)), ducks.some(d => !inLake(d.x, d.z, 0))];
+    const d = ducks.find(k => inLake(k.x, k.z, -10)), start = { x: d.x, z: d.z };
     setMode('boat'); Object.assign(boat, { x: d.x + 6, z: d.z, v: 0 });
     for (let i = 0; i < 60; i++) updateDucks(1 / 60);
     out.scared = d.scared; out.fled = Math.hypot(d.x - boat.x, d.z - boat.z) - 6;
-    out.inLake = ducks.every(k => inLake(k.x, k.z, 0) && inWater(k.x, k.z, 1));
+    out.inWater = ducks.every(k => inWater(k.x, k.z, 1));
     setMode('car');
     for (let i = 0; i < 60 * 60; i++) updateDucks(1 / 60);
     out.home = Math.hypot(d.x - start.x, d.z - start.z);
     return out;
   });
-  expect(r.fast).toBeGreaterThan(1.5);
-  expect(r.slow).toBeGreaterThan(0);
-  expect(r.slow).toBeLessThan(.3);
-  expect(r.landed).toBe(0);
+  expect(r.count).toEqual([10, true, true]);
   expect(r.scared).toBe(true);
   expect(r.fled).toBeGreaterThan(3);
-  expect(r.inLake).toBe(true);
+  expect(r.inWater).toBe(true);
   expect(r.home).toBeLessThan(1.5);
 });
 
@@ -376,8 +513,9 @@ test('space: stars only the rocket can catch, soft bumps, the edge, and the Moon
     out.stars = [spaceStars.length, spaceStars.every(s => Math.hypot(s.x, s.y, s.z) < SB && [...planets, MOON].every(b => dist(s, b) > b.r + 30))];
     const before = score; Object.assign(spaceStars[0], { x: rocket.x, y: rocket.y, z: rocket.z }); step(1 / 60);
     out.catch = [score - before, dist(spaceStars[0], rocket) > 150];
-    const pl = planets[0]; Object.assign(rocket, { x: pl.x + pl.r, y: pl.y, z: pl.z }); step(1 / 60);
-    out.planet = dist(rocket, pl) >= pl.r + 9.9;
+    const pl = planets[0]; Object.assign(rocket, { x: pl.x + pl.r + 15, y: pl.y, z: pl.z }); step(1 / 60);
+    out.planet = [scene, planetIx]; // planets are landed on now (#18)
+    scene = 'space'; mode = 'rocket';
     Object.assign(rocket, { x: SB + 50, y: 0, z: 0, a: Math.PI / 2 }); keys.add('ArrowUp'); step(2); keys.clear();
     out.edge = Math.hypot(rocket.x, rocket.y, rocket.z) <= SB;
     Object.assign(rocket, { x: MOON.x, y: MOON.y + MOON.r + 15, z: MOON.z }); step(1 / 60);
@@ -386,7 +524,7 @@ test('space: stars only the rocket can catch, soft bumps, the edge, and the Moon
     out.buggy = [scene, document.getElementById('mode').textContent, tracks.length];
     return out;
   }, STEP);
-  expect(r).toEqual({ stars: [6, true], catch: [1, true], planet: true, edge: true, moon: ['moon', 'rocket'], landed: true,
+  expect(r).toEqual({ stars: [6, true], catch: [1, true], planet: ['planet', 0], edge: true, moon: ['moon', 'rocket'], landed: true,
     buggy: ['moon', 'H = 🚀', 0] });
 });
 
@@ -422,6 +560,120 @@ test('the moon buggy bounces over crater rims, leaves tracks, and H flies home t
   expect(r.landTime).toBeLessThan(40);
   expect(r.pad).toEqual([true, 'H = 🚗']);
   expect(r.car).toEqual(['car', true]);
+});
+
+// ---------- Moon stars and jump ramps (#16) ----------
+
+test('moon: 3 striped ramps and 8 + 3 stars, laid out the same every time and clear of craters, rocket and edge', async ({ page }) => {
+  test.setTimeout(150_000); // loads the game twice
+  await open(page);
+  const layout = () => page.evaluate(() => ({ ramps: moonRamps, stars: moonStars }));
+  const r = await layout();
+  expect(r.ramps).toHaveLength(3);
+  expect(r.stars.filter(s => s.ramp < 0)).toHaveLength(8);
+  expect(r.stars.filter(s => s.ramp >= 0).map(s => s.ramp)).toEqual([0, 1, 2]);
+  const bad = await page.evaluate(() => {
+    const out = [];
+    for (const r of moonRamps) {
+      for (const u of [-RAMP_L / 2 - 8, -RAMP_L / 2, 0, RAMP_L / 2, RAMP_L / 2 + 2]) {
+        const q = rampPoint(r, u);
+        if (Math.hypot(q.x, q.z) > MOONR - 15) out.push('edge');
+        if (Math.hypot(q.x, q.z) < 20) out.push('rocket');
+        if (craters.some(c => Math.hypot(c.x - q.x, c.z - q.z) < c.r + 4)) out.push('crater');
+      }
+      if (moonRamps.some(o => o !== r && Math.hypot(o.x - r.x, o.z - r.z) < 40)) out.push('ramps');
+    }
+    for (const s of moonStars.filter(s => s.ramp < 0)) {
+      if (Math.hypot(s.x, s.z) < 12 || Math.hypot(s.x, s.z) > MOONR - 20) out.push('star spot');
+      if (craters.some(c => Math.hypot(c.x - s.x, c.z - s.z) < c.r + 4)) out.push('star crater');
+      if (moonRamps.some(r => { const l = rampLocal(r, s.x, s.z); return Math.abs(l.u) < RAMP_L / 2 + 4 && Math.abs(l.v) < RAMP_W / 2 + 4; })) out.push('star ramp');
+    }
+    return out;
+  });
+  expect(bad).toEqual([]);
+  await page.reload();
+  await page.waitForFunction(() => T > 0.3);
+  expect(await layout()).toEqual(r);
+});
+
+test('moon: the buggy catches ground stars and ramp stars, and each comes back', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnMoon(); step(30, () => mode === 'buggy');
+    const ground = moonStars.findIndex(s => s.ramp < 0), before = score, old = moonStars[ground];
+    Object.assign(buggy, { x: old.x, z: old.z, v: 0 }); buggy.g = buggy.y = moonGround(old.x, old.z); step(1 / 60);
+    out.ground = [score - before, moonStars[ground] !== old, moonStars.filter(s => s.ramp < 0).length];
+    const ri = moonStars.findIndex(s => s.ramp === 1), oldR = moonStars[ri], b2 = score;
+    Object.assign(buggy, { x: oldR.x, z: oldR.z, y: oldR.y - 1.5, vy: 0, v: 0 }); step(1 / 60);
+    step(.5); // still right there: the caught star waits, so no more points
+    out.ramp = [score - b2, moonStars[ri].ramp, moonStars[ri].x === oldR.x && moonStars[ri].z === oldR.z, moonStars[ri].wait];
+    const far = moonStars.findIndex(s => s.ramp < 0), b3 = score; // the rocket can't catch them, and a buggy far below can't either
+    Object.assign(buggy, { x: moonStars[far].x, z: moonStars[far].z, y: 8, vy: 0, v: 0, g: 0 }); step(1 / 60);
+    out.high = score - b3;
+    return out;
+  }, STEP);
+  expect(r.ground).toEqual([1, true, 8]);
+  expect(r.ramp).toEqual([1, 1, true, true]);
+  expect(r.high).toBe(0);
+});
+
+test('moon: a fast run up a ramp reaches its star and lands with dust, a slow run does not', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP);
+    setMode('rocket'); landOnMoon(); step(30, () => mode === 'buggy');
+    const run = speed => {
+      const ramp = moonRamps[0], st = rampPoint(ramp, -RAMP_L / 2 - 14), star = moonStars.find(q => q.ramp === 0);
+      Object.assign(buggy, { x: st.x, z: st.z, a: ramp.a, v: speed, vy: 0, up: 0, peak: 0 });
+      buggy.g = buggy.y = moonGround(st.x, st.z); keys.clear(); fx.length = 0;
+      let top = 0, dust = 0, caught = 0, now = star;
+      for (let i = 0; i < 60 * 9; i++) {
+        if (buggy.y < buggy.g + .05) buggy.v = speed; // hold the speed while on the ground
+        update(1 / 60); top = Math.max(top, buggy.y); dust = Math.max(dust, fx.filter(f => f.dust).length);
+        const q = moonStars.find(k => k.ramp === 0); if (q !== now) { caught++; now = q; }
+      }
+      return { top, dust, caught, waiting: now.wait };
+    };
+    const rim = Math.max(...craters.map(c => moonGround(c.x + c.r, c.z)));
+    return { fast: run(14), slow: run(3), rim, ramp: RAMP_H };
+  }, STEP);
+  expect(r.fast.caught).toBe(1); // flying through the star counts once, then it waits for the buggy to drive clear
+  expect(r.fast.waiting).toBe(false); // and it is back once the buggy has gone
+  expect(r.fast.top).toBeGreaterThan(r.ramp + 2); // clearly above the ramp, far above a crater rim
+  expect(r.fast.top).toBeGreaterThan(r.rim * 5);
+  expect(r.fast.dust).toBeGreaterThanOrEqual(8); // the landing puff
+  expect(r.slow.caught).toBe(0);
+  expect(r.slow.top).toBeLessThan(r.ramp + 1); // only up the slope, no flight
+});
+
+test('moon: the sides and high end of a ramp are walls, so backwards and sideways runs give no big jump', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnMoon(); step(30, () => mode === 'buggy');
+    const ramp = moonRamps[0];
+    const go = (u, v, heading) => { // start beside the ramp and drive at it
+      const st = rampPoint(ramp, u, v);
+      Object.assign(buggy, { x: st.x, z: st.z, a: ramp.a + heading, v: 12, vy: 0, up: 0, peak: 0 });
+      buggy.g = buggy.y = moonGround(st.x, st.z); fx.length = 0;
+      let top = 0;
+      for (let i = 0; i < 180; i++) {
+        if (buggy.y < buggy.g + .05) buggy.v = 12;
+        update(1 / 60); top = Math.max(top, buggy.y);
+      }
+      return top;
+    };
+    out.back = go(RAMP_L / 2 + 8, 0, Math.PI);          // down the high end, from behind
+    out.side = go(0, RAMP_W / 2 + 8, -Math.PI / 2);     // across from the right
+    out.side2 = go(0, -RAMP_W / 2 - 8, Math.PI / 2);    // across from the left
+    out.front = go(-RAMP_L / 2 - 10, 0, 0);              // the right way up
+    return out;
+  }, STEP);
+  expect(r.back).toBeLessThan(1);
+  expect(r.side).toBeLessThan(1);
+  expect(r.side2).toBeLessThan(1);
+  expect(r.front).toBeGreaterThan(5);
 });
 
 test('with the keyboard: blast off, space, the Moon and the buggy all draw without errors', async ({ page }) => {
@@ -586,6 +838,7 @@ test('each set of five stars climbs the chime up to the fanfare, and the horn ne
 });
 
 test('M mutes everything through the master volume and shows the muted speaker; a reload starts with sound', async ({ page }) => {
+  test.setTimeout(150_000); // loads the game twice
   const problems = await open(page);
   const icon = page.locator('#muted');
   await expect(icon).toBeHidden();
@@ -621,5 +874,515 @@ test('switching vehicles quickly spins the rotor up and down without errors', as
   const landed = await page.evaluate(() => rotorSpin);
   await page.waitForFunction(was => mode === 'car' && rotorSpin < was, landed, { timeout: 40_000 });
   expect(await page.evaluate(() => [rotorSpin >= 0, rotorSpin <= 1])).toEqual([true, true]);
+  expect(problems).toEqual([]);
+});
+
+// ---------- Construction site (#9) ----------
+
+test('construction site: out in the countryside, clear of water, mountains and the station, with a track from a town road', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const bad = [], track = [];
+    for (let lx = -YW - 6; lx <= YW + 6; lx += 2) for (let lz = -YD - TRACK; lz <= YD + 6; lz += 2) {
+      const [x, z] = site.world(lx, lz);
+      if (wet(x, z, 5) || mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4) || inStationArea(x, z, 5)) bad.push([lx, lz]);
+    }
+    for (let t = -YD - TRACK + 2; t <= -YD + 3; t += 2) { const [x, z] = site.world(0, t); if (hits(x, z)) track.push(t); } // the car can drive the whole track and through the gate
+    const [sx, sz] = site.world(0, -YD - TRACK);
+    return {
+      bad, track, trackStart: townDist(sx, sz), fromTown: townDist(site.x, site.z),
+      fence: [hits(...site.world(YW / 2, -YD)), hits(...site.world(YW, 0)), hits(...site.world(-YW, 5)), hits(...site.world(5, YD))],
+      trees: solids.slice(0, station.firstSolid).filter(s => inSiteArea((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2)).length,
+      stars: stars.filter(s => inSiteArea(s.x, s.z)).length,
+    };
+  });
+  expect(r).toMatchObject({ bad: [], track: [], fence: [true, true, true, true], trees: 0, stars: 0 });
+  expect(r.trackStart).toBeLessThan(8);
+  expect(r.fromTown).toBeGreaterThan(55);
+  expect(r.fromTown).toBeLessThan(130);
+});
+
+test('dirt piles: dirt lands on a pile or starts one, twelve at most, the big pile never runs low and fills up again', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const out = {};
+    piles.splice(0);
+    const [x, z] = site.world(0, 0);
+    addDirt(x, z); addDirt(x + .5, z);
+    out.joined = [piles.length, piles[0].amount];
+    addDirt(x + 15, z); out.apart = piles.length;
+    for (let i = 0; i < 30; i++) addDirt(x - 28 + (i % 6) * 9, z + (i % 5) * 9 - 18);
+    out.most = piles.length;
+    const before = piles.reduce((n, p) => n + p.amount, 0); addDirt(x, z + 3); out.kept = piles.reduce((n, p) => n + p.amount, 0) - before; // none lost
+    piles.splice(0); addDirt(site.x + 500, site.z + 500); out.inside = inYard(piles[0].x, piles[0].z);
+    piles.splice(0); addDirt(x, z); takeDirt(piles[0]); out.gone = piles.length;
+    piles.splice(0); addPile(0, 0, 40, true); const big = piles[0];
+    for (let i = 0; i < 60; i++) takeDirt(big);
+    out.low = big.amount;
+    for (let i = 0; i < 310; i++) updateSite(1 / 60); // 5 s
+    out.refilled = big.amount;
+    big.amount = 39; for (let i = 0; i < 620; i++) updateSite(1 / 60);
+    out.full = big.amount;
+    return out;
+  });
+  expect(r).toEqual({ joined: [1, 2], apart: 2, most: 12, kept: 1, inside: true, gone: 0, low: 5, refilled: 6, full: 40 });
+});
+
+test('H climbs into the machine next to the car and back out; the badge and help line follow', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const badge = () => document.getElementById('mode').textContent, help = () => document.getElementById('help').textContent, out = {};
+    piles.splice(0); blocks.splice(0); // nothing in the way of the car
+    for (const m of machines) {
+      let spot = null;
+      for (let k = 0; k < 16 && !spot; k++) { // a free spot where this machine, not a neighbour, is the nearest
+        const x = m.x + Math.cos(k * .4) * (m.r + 2.6), z = m.z + Math.sin(k * .4) * (m.r + 2.6);
+        setMode('car'); Object.assign(car, { x, z });
+        if (!hits(x, z) && nearMachine() === m) spot = { x, z };
+      }
+      setMode('car'); Object.assign(car, spot, { v: 0 }); refreshHud();
+      out[m.kind] = [badge(), help()];
+      switchVehicle(); out[m.kind + 'In'] = [mode, badge(), help()];
+      switchVehicle(); out[m.kind + 'Out'] = [mode, hits(car.x, car.z), Math.hypot(car.x - m.x, car.z - m.z) < 14, inYard(car.x, car.z)];
+    }
+    const [gx, gz] = site.world(0, -30); setMode('car'); Object.assign(car, { x: gx, z: gz }); refreshHud(); out.gate = badge();
+    setMode('heli'); Object.assign(heli, { x: digger.x, y: 20, z: digger.z }); switchVehicle(); out.heliLands = [mode, hits(car.x, car.z)];
+    return out;
+  });
+  const car = 'Arrows or WASD = drive · Space = beep beep! · H = climb in · M = sound';
+  const back = ['car', false, true, true];
+  expect(r).toEqual({
+    digger: ['H = 🚜', car], diggerIn: ['digger', 'H = 🚗', 'Arrows or WASD = drive · Space = scoop or dump · H = car · M = sound'], diggerOut: back,
+    truck: ['H = 🚚', car], truckIn: ['truck', 'H = 🚗', 'Arrows or WASD = drive · Space = tip the load · H = car · M = sound'], truckOut: back,
+    dozer: ['H = 🚜', car], dozerIn: ['dozer', 'H = 🚗', 'Arrows or WASD = drive · Space = blade up or down · H = car · M = sound'], dozerOut: back,
+    crane: ['H = 🏗️', car], craneIn: ['crane', 'H = 🚗', 'Arrows = swing the arm and move the hook · Space = grab or let go · H = car · M = sound'], craneOut: back,
+    gate: 'H = 🚁', heliLands: ['car', false],
+  });
+});
+
+test('digger: scoops from the big pile, fills the truck, spills on the ground; a full truck spills beside it', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    machines.splice(machines.indexOf(dozer), 1); piles.splice(1); // the bulldozer would flatten the new piles while we look
+    setMode('car'); Object.assign(car, { x: digger.x, z: digger.z }); boardMachine(digger);
+    const big = piles[0], loose = () => piles.filter(p => !p.refill).reduce((n, p) => n + p.amount, 0); // the big pile also fills up by itself
+    Object.assign(digger, { a: site.a, load: 0, act: null }); truck.load = 0;
+    machineAction(digger); step(.5); out.pose = diggerPose(digger).join() !== [.9, -2, -.9].join(); // the arm moves
+    step(1.7); out.scoop = [digger.load, big.amount];
+    digger.a = site.a + Math.PI / 2; // towards the truck waiting at the loading spot
+    machineAction(digger); step(2); out.loaded = [digger.load, truck.load];
+    digger.a = site.a + Math.PI; digger.load = 1; const n = piles.length; // towards the gate, nothing there
+    machineAction(digger); step(2); out.ground = [digger.load, piles.length - n, loose()];
+    digger.a = site.a + Math.PI / 2; digger.load = 1; truck.load = 4; const m2 = piles.length, total = loose();
+    machineAction(digger); step(2); out.full = [truck.load, loose() - total, piles.length - m2 >= 0];
+    digger.a = site.a; piles.splice(1); digger.load = 0; // no pile in front of the arm: digging air
+    Object.assign(digger, { x: site.world(0, 15)[0], z: site.world(0, 15)[1] });
+    machineAction(digger); step(2.2);
+    out.air = digger.load; piles.splice(1);
+    machineAction(digger); machineAction(digger); out.once = digger.act && digger.act.kind; // a second press while busy changes nothing
+    return out;
+  }, STEP);
+  expect(r).toEqual({ pose: true, scoop: [1, 39], loaded: [0, 1], ground: [0, 1, 1], full: [4, 1, true], air: 0, once: 'scoop' });
+});
+
+test('dump truck: tips the load out behind as a pile and the bed comes back down; empty it tips nothing', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    piles.splice(0); setMode('car'); Object.assign(car, { x: truck.x, z: truck.z }); boardMachine(truck);
+    const [x, z] = site.world(0, 14); Object.assign(truck, { x, z, a: site.a, load: 4, act: null, v: 0 });
+    const [bx, bz] = [x - Math.sin(truck.a) * 6.6, z - Math.cos(truck.a) * 6.6];
+    machineAction(truck); step(1.3); out.up = bedAngle(truck) > .7;
+    step(1.5); out.tipped = [truck.load, piles.length, piles[0] && Math.round(piles[0].amount), piles[0] && Math.hypot(piles[0].x - bx, piles[0].z - bz) < 1];
+    out.down = [bedAngle(truck), truck.act];
+    machineAction(truck); step(3); out.empty = [truck.load, piles.length];
+    return out;
+  }, STEP);
+  expect(r).toEqual({ up: true, tipped: [0, 1, 4, true], down: [0, null], empty: [0, 1] });
+});
+
+test('bulldozer: blade down pushes a pile along and flattens it; blade up drives over it', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    piles.splice(0); setMode('car'); Object.assign(car, { x: dozer.x, z: dozer.z }); boardMachine(dozer);
+    const [x, z] = site.world(-5, -5); Object.assign(dozer, { x, z, a: site.a, v: 0, blade: 0, bladeT: 0 });
+    const ahead = d => [x + Math.sin(site.a) * d, z + Math.cos(site.a) * d];
+    addDirt(...ahead(6), 20); const big = piles[0], y0 = pileH(big);
+    keys.add('ArrowUp'); step(1.5); out.bladeUp = [big.spread, Math.round(Math.hypot(big.x - ahead(6)[0], big.z - ahead(6)[1]))]; // driven over, not pushed
+    keys.clear(); step(2); Object.assign(dozer, { x, z, v: 0 });
+    machineAction(dozer); step(1); out.bladeDown = dozer.blade > .6; // Space lowers it
+    Object.assign(big, { x: ahead(6)[0], z: ahead(6)[1], spread: 1 });
+    keys.add('ArrowUp'); step(3); keys.clear();
+    out.pushed = [big.spread > 1.5, pileH(big) < y0, Math.hypot(big.x - ahead(6)[0], big.z - ahead(6)[1]) > 3, piles.length];
+    machineAction(dozer); step(1); out.bladeUpAgain = dozer.blade < .4;
+    piles.splice(0); addDirt(...ahead(8), 3); Object.assign(dozer, { x, z, a: site.a, v: 0, bladeT: 1, blade: 1 }); keys.add('ArrowUp');
+    out.small = step(8, () => piles.length === 0) < 8; keys.clear(); // a small pile ends up flat and gone
+    return out;
+  }, STEP);
+  expect(r).toEqual({ bladeUp: [1, 0], bladeDown: true, pushed: [true, true, true, 1], bladeUpAgain: true, small: true });
+});
+
+test('crane: swings, picks up a block, stacks blocks, never onto a machine, a full stack puts the block beside it', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('car'); Object.assign(car, { x: crane.x, z: crane.z - 9 }); boardMachine(crane);
+    const aim = (x, z) => { crane.a = Math.atan2(x - crane.x, z - crane.z); crane.reach = Math.hypot(x - crane.x, z - crane.z); };
+    const b0 = blocks[0], b1 = blocks[1], [sx, sz] = STACK;
+    aim(b0.x, b0.z); machineAction(crane); step(1); out.lowering = crane.hy < HOOKUP;
+    step(2); out.held = [crane.held === b0, b0.held, Math.abs(b0.y - (crane.hy - 3.2)) < .01, crane.hy];
+    aim(sx, sz); step(.1); out.carried = Math.hypot(b0.x - sx, b0.z - sz) < .1;
+    machineAction(crane); step(3); out.stacked = [crane.held, b0.held, Math.round(b0.y)];
+    aim(b1.x, b1.z); machineAction(crane); step(3); aim(sx, sz); machineAction(crane); step(3);
+    out.second = [Math.round(b1.y), Math.hypot(b1.x - b0.x, b1.z - b0.z) < .1];
+    // over a machine the block stays in the hook
+    aim(b0.x + 1, b0.z); blocks[2].x = 0; // (leave the others alone)
+    const b2 = blocks[2]; Object.assign(b2, { x: dozer.x, z: dozer.z + 0 }); // park a block on the dozer's spot to grab, then try to put it down on the truck
+    Object.assign(b2, { x: blocks[3].x + 6, z: blocks[3].z, y: 0 }); aim(b2.x, b2.z); machineAction(crane); step(3);
+    aim(truck.x, truck.z); machineAction(crane); step(3); out.refused = [crane.held === b2, b2.held];
+    aim(sx + 8, sz); machineAction(crane); step(3); out.freed = [crane.held, Math.round(b2.y)];
+    // a stack eight high: the next block goes down beside it
+    blocks.forEach((b, i) => Object.assign(b, { held: false, x: sx + 20, z: sz + 5 * (i % 2), y: 0 })); crane.held = null;
+    for (let i = 0; i < 8; i++) Object.assign(blocks[i], { x: sx, z: sz, y: i * 2 });
+    Object.assign(blocks[8], { held: true }); crane.held = blocks[8]; aim(sx, sz); crane.hy = HOOKUP;
+    machineAction(crane); step(3);
+    out.beside = [crane.held, Math.hypot(blocks[8].x - sx, blocks[8].z - sz) > 2, blocks[8].y, Math.max(...blocks.map(b => b.y))];
+    // arrows swing the arm and move the hook, within its range
+    crane.act = null; const a0 = crane.a, r0 = crane.reach;
+    keys.add('ArrowLeft'); keys.add('ArrowUp'); step(1); keys.clear(); out.moved = [crane.a > a0, crane.reach > r0];
+    keys.add('ArrowDown'); step(10); keys.clear(); out.min = crane.reach;
+    keys.add('ArrowUp'); step(10); keys.clear(); out.max = crane.reach;
+    return out;
+  }, STEP);
+  expect(r).toMatchObject({
+    lowering: true, held: [true, true, true, 20], carried: true, stacked: [null, false, 0], second: [2, true],
+    refused: [true, true], freed: [null, 0], beside: [null, true, 0, 14], moved: [true, true], min: 5, max: 24,
+  });
+});
+
+test('machines on their own: the digger loads the truck, the truck tips, the dozer flattens it, the crane builds a tower', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    const [gx, gz] = site.world(0, -40); setMode('car'); Object.assign(car, { x: gx, z: gz }); // the car stays out of the way
+    out.loaded = step(120, () => truck.phase === 'go');
+    out.leaves = step(60, () => truck.phase === 'back');
+    step(8); out.tipped = piles.some(p => !p.refill && p.amount >= 3);
+    out.flat = step(120, () => !piles.some(p => !p.refill)); // the dozer pushes every small pile flat and gone
+    out.big = piles.find(p => p.refill).amount;
+    out.tower = step(400, () => crane.dir === 'clear');
+    out.stacked = blocks.filter(b => b.y > 0).length;
+    out.dozerMoved = Math.hypot(dozer.x - dozer.home.x, dozer.z - dozer.home.z) > 1 || dozer.leg === 1;
+    out.inside = machines.every(m => inYard(m.x, m.z, 2));
+    return out;
+  }, STEP);
+  expect(r.loaded).toBeLessThan(120);
+  expect(r.leaves).toBeLessThan(60);
+  expect(r.tipped).toBe(true);
+  expect(r.flat).toBeLessThan(120);
+  expect(r.big).toBeGreaterThan(4);
+  expect(r.tower).toBeLessThan(400);
+  expect(r.stacked).toBeGreaterThanOrEqual(7);
+  expect(r.inside).toBe(true);
+});
+
+test('machines on their own stop for the car and wait; they stay inside the yard; going back to a job from anywhere', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    piles.splice(1); setMode('car');
+    // the truck is on its way to the tipping spot with the car parked in front of it
+    Object.assign(truck, { phase: 'go', load: 4, v: 0 });
+    const [px, pz] = site.world(-10, 3); Object.assign(truck, { x: px, z: pz, a: Math.atan2(TIPSPOT[0] - px, TIPSPOT[1] - pz) });
+    Object.assign(car, { x: px + Math.sin(truck.a) * 8, z: pz + Math.cos(truck.a) * 8, v: 0 });
+    step(6); out.waits = [Math.hypot(truck.x - car.x, truck.z - car.z) > 4, truck.blocked > 0, Math.abs(truck.v) < 1];
+    Object.assign(car, { x: site.world(0, -40)[0], z: site.world(0, -40)[1] });
+    step(12); out.goes = Math.hypot(truck.x - px, truck.z - pz) > 8 || truck.phase === 'back';
+    // a digger left far off with a full bucket drives back towards its spot, and goes to work as soon as the big pile is in reach
+    Object.assign(digger, { x: site.world(10, 20)[0], z: site.world(10, 20)[1], load: 1, act: null });
+    const far = Math.hypot(digger.x - digger.home.x, digger.z - digger.home.z);
+    out.home = step(60, () => digger.act) < 60 && Math.hypot(digger.x - digger.home.x, digger.z - digger.home.z) < far - 10;
+    // driving a machine into the fence stops at the fence
+    boardMachine(crane); leaveMachine(); boardMachine(dozer);
+    Object.assign(dozer, { x: site.world(0, 0)[0], z: site.world(0, 0)[1], a: site.a + Math.PI / 2, v: 0 });
+    keys.add('ArrowUp'); step(12); keys.clear();
+    out.fence = [inYard(dozer.x, dozer.z, 3), inYard(dozer.x, dozer.z, 6) === false];
+    return out;
+  }, STEP);
+  expect(r).toMatchObject({ waits: [true, true, true], goes: true, home: true, fence: [true, true] });
+});
+
+test('a crane on its own waits while the car is under the hook; the digger goes round the truck after a pushed-away big pile; no climbing in through the fence', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    const [gx, gz] = site.world(0, -40); setMode('car'); Object.assign(car, { x: gx, z: gz });
+    // the crane carries a block to the tower spot, but the car is parked there
+    machines.splice(0, machines.length, crane);
+    const [sx, sz] = STACK, b = blocks[0];
+    Object.assign(car, { x: sx, z: sz, v: 0 });
+    Object.assign(b, { held: true }); crane.held = b; crane.dir = 'build'; crane.act = null;
+    step(8); out.waits = [crane.held === b, b.held];
+    Object.assign(car, { x: gx, z: gz }); step(8); out.puts = [crane.held, b.held];
+    // the big pile pushed far from the digger's spot: the digger drives over and starts scooping
+    machines.push(digger, truck); piles.splice(1);
+    const big = piles[0], [bx, bz] = site.world(15, -15); Object.assign(big, { x: bx, z: bz });
+    Object.assign(digger, { x: digger.home.x, z: digger.home.z, load: 0, act: null });
+    const far = Math.hypot(digger.x - bx, digger.z - bz);
+    out.follows = step(60, () => digger.act) < 60 && Math.hypot(digger.x - bx, digger.z - bz) < far - 10;
+    // a machine just inside the fence, the car just outside it: no climbing in through the fence
+    machines.push(dozer); Object.assign(dozer, { x: site.world(0, YD - 3)[0], z: site.world(0, YD - 3)[1] });
+    Object.assign(car, { x: site.world(0, YD + 2.5)[0], z: site.world(0, YD + 2.5)[1] });
+    out.outside = nearMachine();
+    Object.assign(car, { x: site.world(0, YD - 7.5)[0], z: site.world(0, YD - 7.5)[1] });
+    out.inside = nearMachine() === dozer;
+    return out;
+  }, STEP);
+  expect(r).toEqual({ waits: [true, true], puts: [null, false], follows: true, outside: null, inside: true });
+});
+
+test('machines catch no stars, and the drive-around still works with sound', async ({ page }) => {
+  const problems = await open(page);
+  await page.keyboard.press('KeyX'); // start, which also starts the sound
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('car'); Object.assign(car, { x: dozer.x + 6, z: dozer.z }); boardMachine(dozer);
+    Object.assign(stars[0], { x: dozer.x, z: dozer.z, y: 2.2, sky: false });
+    const s0 = score; step(1); out.score = score - s0;
+    // backing up beeps, and the machine you are in is heard loudest
+    const heard = [], realTone = tone;
+    tone = (f, ...a) => { heard.push(f); realTone(f, ...a); };
+    Object.assign(dozer, { v: -3, beepT: 0 }); keys.add('ArrowDown'); step(1); keys.clear();
+    tone = realTone;
+    out.beeps = heard.filter(f => f === 1100).length;
+    setMode('car'); Object.assign(car, { x: digger.x, z: digger.z });
+    out.loud = [siteVol(digger) > 0, siteVol(crane) > 0];
+    Object.assign(car, { x: site.world(0, -90)[0], z: site.world(0, -90)[1] });
+    out.far = machines.map(siteVol);
+    out.hum = siteGain instanceof GainNode;
+    return out;
+  }, STEP);
+  expect(r.score).toBe(0);
+  expect(r.beeps).toBeGreaterThan(0);
+  expect(r.loud[0]).toBe(true);
+  expect(r.far).toEqual([0, 0, 0, 0]);
+  expect(r.hum).toBe(true);
+  expect(problems).toEqual([]);
+});
+
+test('with the keyboard: climb into each machine, work it, and everything draws without errors', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX'); // start
+  await page.evaluate(() => { const [x, z] = site.world(-12, 0); Object.assign(car, { x, z, a: site.a }); });
+  for (const kind of ['digger', 'truck', 'dozer', 'crane']) {
+    await page.evaluate(k => {
+      const m = machines.find(o => o.kind === k), edge = (o, x, z) => Math.hypot(o.x - x, o.z - z) - o.r;
+      setMode('car');
+      for (let i = 0; i < 40; i++) { // beside this machine, nearer to it than to any other
+        const x = m.x + Math.cos(i * .3) * (m.r + 2.8), z = m.z + Math.sin(i * .3) * (m.r + 2.8);
+        if (!hits(x, z) && machines.every(o => o === m || edge(o, x, z) > edge(m, x, z))) { Object.assign(car, { x, z }); break; }
+      }
+    }, kind);
+    await page.keyboard.press('KeyH');
+    await page.waitForFunction(k => mode === k, kind, { timeout: 40_000 });
+    const blade = await page.evaluate(() => dozer.bladeT); // the bulldozer may already have its blade down, pushing a pile
+    await page.keyboard.down('ArrowUp'); await page.keyboard.down('ArrowLeft'); await page.keyboard.press('Space');
+    await page.waitForFunction(([k, b]) => { const m = machines.find(o => o.kind === k); return k === 'dozer' ? m.bladeT !== b : !!m.act; }, [kind, blade], { timeout: 40_000 });
+    await page.keyboard.up('ArrowLeft'); await page.keyboard.up('ArrowUp');
+    const shot = await page.locator('canvas').screenshot();
+    expect(shot.length).toBeGreaterThan(5_000);
+    await page.keyboard.press('KeyH');
+    await page.waitForFunction(() => mode === 'car', null, { timeout: 40_000 });
+  }
+  expect(await glError(page)).toBe(0);
+  expect(problems).toEqual([]);
+});
+
+// ---------- Planet games (#18) ----------
+
+test('planets: towers, balloons, mushrooms and stars are roomy and laid out the same every time', async ({ page }) => {
+  test.setTimeout(150_000); // loads the game twice
+  await open(page);
+  const layout = () => page.evaluate(() => ({ towers: towers.map(t => ({ x: t.x, z: t.z, n: t.n })), rocks: orangeRocks, balloons: balloonStart,
+    mushrooms: mushrooms.map(m => ({ x: m.x, z: m.z, r: m.r, h: m.h })), stars: mushStart }));
+  const r = await layout();
+  expect([r.towers.length, r.balloons.length, r.mushrooms.length, r.stars.length]).toEqual([8, 12, 10, 10]);
+  const bad = await page.evaluate(() => {
+    const out = [], d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+    const check = (list, gap, size, name) => list.forEach((p, i) => {
+      const r = Math.hypot(p.x, p.z), s = size(p);
+      if (r - s < 40) out.push(name + ' middle');
+      if (r + s > PLANET_R - 20) out.push(name + ' edge');
+      if (list.some((q, j) => j !== i && d(p, q) < gap)) out.push(name + ' gap');
+    });
+    check(towers, 70, () => 2, 'tower'); check(balloonStart, 40, () => 3, 'balloon'); check(mushrooms, 60, m => m.r, 'mushroom');
+    if (towers.some(t => t.n < 4 || t.n > 6)) out.push('tower height');
+    if (balloonStart.some(b => b.h < 6 || b.h > 45)) out.push('balloon height');
+    if (mushrooms.some(m => m.r < 6 || m.r > 9 || m.h < 3 || m.h > 6)) out.push('mushroom size');
+    if (mushStart.some(s => s.y < 15 || s.y > 30 || d(s, mushrooms[s.m]) > 6.01)) out.push('star spot');
+    if (orangeRocks.some(k => towers.some(t => d(k, t) < 30))) out.push('rock by a tower');
+    return out;
+  });
+  expect(bad).toEqual([]);
+  await page.reload();
+  await page.waitForFunction(() => T > 0.3);
+  expect(await layout()).toEqual(r);
+});
+
+test('planets: flying into each one lands there, its own vehicle comes out, H goes back, and up leaves above it', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = [];
+    for (let i = 0; i < 3; i++) {
+      setMode('rocket'); enterSpace();
+      const pl = planets[i]; Object.assign(rocket, { x: pl.x, y: pl.y + pl.r + 15, z: pl.z }); step(1 / 60);
+      const where = [scene, planetIx, mode];
+      const landed = step(30, () => mode !== 'rocket') < 30;
+      const car = [mode, document.getElementById('mode').textContent, document.getElementById('help').textContent];
+      keys.add('ArrowUp'); step(3); keys.clear(); step(1);
+      const inside = Math.hypot(me().x, me().z) < PLANET_R - 3;
+      switchVehicle(); const back = [mode, scene, document.getElementById('help').textContent === HELP.rocketMoon];
+      keys.add('KeyW'); const left = step(20, () => scene === 'space') < 20; keys.clear();
+      const above = rocket.y > pl.y + pl.r && Math.hypot(rocket.x - pl.x, rocket.z - pl.z) < 1;
+      out.push({ where, landed, car, inside, back, left, above });
+    }
+    return out;
+  }, STEP);
+  const help = ['Arrows or WASD = drive the monster truck · H = rocket · M = sound',
+    'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound',
+    'Arrows or WASD = drive the bouncy car · H = rocket · M = sound'];
+  ['monster', 'saucer', 'bouncer'].forEach((car, i) => expect(r[i]).toEqual({ where: ['planet', i, 'rocket'], landed: true,
+    car: [car, 'H = 🚀', help[i]], inside: true, back: ['rocket', 'planet', true], left: true, above: true }));
+});
+
+test('tower crash: a fast hit knocks a tower over for a star, a slow one bumps, and it builds itself back up', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnPlanet(0); step(30, () => mode === 'monster');
+    const t = towers[0], run = speed => { // start 15 back from the tower, heading straight at it
+      const a = Math.atan2(t.x, t.z) + Math.PI;
+      Object.assign(monster, { x: t.x - Math.sin(a) * 15, z: t.z - Math.cos(a) * 15, a, v: speed, steer: 0 });
+      keys.clear(); if (speed >= 6) keys.add('ArrowUp');
+      const before = score;
+      for (let i = 0; i < 60 * 3 && t.state === 'up'; i++) { if (speed < 6) monster.v = Math.max(monster.v, Math.min(speed, monster.v + 1)); update(1 / 60); }
+      keys.clear();
+      return { state: t.state, stars: score - before, gap: Math.hypot(monster.x - t.x, monster.z - t.z) };
+    };
+    out.slow = run(4);
+    out.fast = run(15);
+    step(1);
+    out.blocks = [t.blocks.length, Math.max(...t.blocks.map(b => Math.hypot(b.x - t.x, b.z - t.z))) > 3];
+    Object.assign(monster, { x: 0, z: 0, v: 0 }); monster.x = rocket.x + 8;
+    out.back = 1 + step(16, () => t.state === 'up'); // seconds since it fell
+    out.solid = t.state === 'up' && t.blocks.length === 0;
+    return out;
+  }, STEP);
+  expect(r.slow.state).toBe('up');
+  expect(r.slow.stars).toBe(0);
+  expect(r.slow.gap).toBeGreaterThan(3.5);
+  expect(r.fast).toMatchObject({ state: 'down', stars: 1 });
+  expect(r.blocks).toEqual([expect.any(Number), true]);
+  expect(r.back).toBeGreaterThan(11);
+  expect(r.back).toBeLessThan(13);
+  expect(r.solid).toBe(true);
+});
+
+test('balloon pop: touching a balloon pops it for a star, a new one comes far from the saucer, and the saucer stays 3 to 60 up', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnPlanet(1); step(30, () => mode === 'saucer');
+    step(3);
+    const b = balloons[0], before = score;
+    Object.assign(saucer, { x: b.x, y: balloonY(b), z: b.z, v: 0, lift: 0 }); step(1 / 60);
+    out.pop = [score - before, b.wait > 0];
+    step(2.1);
+    out.back = [b.wait <= 0, Math.hypot(b.x - saucer.x, b.z - saucer.z) >= 50, balloons.every(o => o === b || Math.hypot(o.x - b.x, o.z - b.z) >= 40)];
+    out.rises = b.y < b.h;
+    keys.add('KeyW'); step(10); keys.clear();
+    out.top = saucer.y - planetGround(saucer.x, saucer.z);
+    keys.add('KeyS'); step(10); keys.clear();
+    out.low = saucer.y - planetGround(saucer.x, saucer.z);
+    Object.assign(saucer, { x: 0, z: PLANET_R - 10, a: 0, v: 32 }); keys.add('ArrowUp'); step(3); keys.clear();
+    out.edge = Math.hypot(saucer.x, saucer.z) < PLANET_R - 3;
+    return out;
+  }, STEP);
+  expect(r.pop).toEqual([1, true]);
+  expect(r.back).toEqual([true, true, true]);
+  expect(r.rises).toBe(true);
+  expect(r.top).toBeCloseTo(60, 5);
+  expect(r.low).toBeCloseTo(3, 5);
+  expect(r.edge).toBe(true);
+});
+
+test('bouncy mushrooms: a cap throws the car at least 22 up, stars up high count and move to another mushroom', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnPlanet(2); step(30, () => mode === 'bouncer');
+    const m = mushrooms[0], g = planetGround(m.x, m.z), a = Math.atan2(m.x, m.z) + Math.PI;
+    Object.assign(bouncer, { x: m.x - Math.sin(a) * (m.r + 6), z: m.z - Math.cos(a) * (m.r + 6), a, v: 10, vy: 0 });
+    bouncer.y = planetGround(bouncer.x, bouncer.z);
+    keys.add('ArrowUp'); let top = 0; for (let i = 0; i < 60 * 4; i++) { update(1 / 60); if (i === 30) keys.clear(); top = Math.max(top, bouncer.y - g); out.wob = out.wob || m.wob > 0; }
+    keys.clear(); keys.add('ArrowDown'); step(1); keys.clear();
+    out.top = top;
+    step(12, () => bouncer.y <= planetGround(bouncer.x, bouncer.z) && bouncer.vy === 0 && !mushrooms.some(k => Math.hypot(bouncer.x - k.x, bouncer.z - k.z) < k.r));
+    const s = mushStars[0], before = score, sy = planetGround(s.x, s.z) + s.y;
+    Object.assign(bouncer, { x: s.x, y: sy - 1.5, z: s.z, v: 0, vy: 0 }); update(1 / 60);
+    out.star = [score - before, mushStars[0] !== s, mushStars[0].m !== s.m, mushStars.length];
+    const low = mushStars[1], b2 = score; // on the ground under a star: too low to catch it
+    Object.assign(bouncer, { x: low.x, z: low.z, v: 0, vy: 0, y: planetGround(low.x, low.z) - 20 }); update(1 / 60);
+    out.low = score - b2;
+    return out;
+  }, STEP);
+  expect(r.top).toBeGreaterThanOrEqual(22);
+  expect(r.top).toBeLessThanOrEqual(30.5);
+  expect(r.wob).toBe(true);
+  expect(r.star).toEqual([1, true, true, 10]);
+  expect(r.low).toBe(0);
+});
+
+test('planets: a visit starts fresh, stars add to the one counter, and each planet has its own tune', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); enterSpace(); out.space = tuneNow() === SPACE_TUNE;
+    landOnMoon(); out.moon = tuneNow() === SPACE_TUNE;
+    out.tunes = [0, 1, 2].map(i => { landOnPlanet(i); return PLANET_TUNES.indexOf(tuneNow()); });
+    landOnPlanet(0); step(30, () => mode === 'monster');
+    const start = score; topple(towers[1], monster); balloons[0].wait = 1;
+    out.score = [score - start, document.getElementById('hud').textContent === '⭐ ' + score];
+    backInRocket(); leavePlanet(); landOnPlanet(0);
+    out.fresh = [towers.every(t => t.state === 'up'), balloons.every(b => b.wait === 0 && b.y === b.h), score - start];
+    return out;
+  }, STEP);
+  expect(r).toEqual({ space: true, moon: true, tunes: [0, 1, 2], score: [1, true], fresh: [true, true, 1] });
+});
+
+test('with the keyboard: each planet and its vehicle draw without errors, and a drop-out note names the planet', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX'); // start
+  for (const i of [0, 1, 2]) {
+    await page.evaluate(i => { setMode('rocket'); landOnPlanet(i); rocket.y = 2; }, i);
+    await page.waitForFunction(() => mode !== 'rocket', null, { timeout: 60_000 });
+    await page.keyboard.down('ArrowUp');
+    await page.waitForFunction(() => Math.abs(me().v) > 8, null, { timeout: 40_000 });
+    await page.keyboard.up('ArrowUp');
+    const shot = await page.locator('canvas').screenshot();
+    expect(shot.length).toBeGreaterThan(3_000);
+    expect(await glError(page)).toBe(0);
+  }
+  await page.keyboard.press('KeyH');
+  await page.waitForFunction(() => mode === 'rocket', null, { timeout: 10_000 });
+  const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
+  await lose.evaluate(l => l.loseContext());
+  await expect(page.locator('#start small')).toContainText('Graphics dropped out: rocket purple planet');
   expect(problems).toEqual([]);
 });
