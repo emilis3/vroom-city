@@ -513,8 +513,9 @@ test('space: stars only the rocket can catch, soft bumps, the edge, and the Moon
     out.stars = [spaceStars.length, spaceStars.every(s => Math.hypot(s.x, s.y, s.z) < SB && [...planets, MOON].every(b => dist(s, b) > b.r + 30))];
     const before = score; Object.assign(spaceStars[0], { x: rocket.x, y: rocket.y, z: rocket.z }); step(1 / 60);
     out.catch = [score - before, dist(spaceStars[0], rocket) > 150];
-    const pl = planets[0]; Object.assign(rocket, { x: pl.x + pl.r, y: pl.y, z: pl.z }); step(1 / 60);
-    out.planet = dist(rocket, pl) >= pl.r + 9.9;
+    const pl = planets[0]; Object.assign(rocket, { x: pl.x + pl.r + 15, y: pl.y, z: pl.z }); step(1 / 60);
+    out.planet = [scene, planetIx]; // planets are landed on now (#18)
+    scene = 'space'; mode = 'rocket';
     Object.assign(rocket, { x: SB + 50, y: 0, z: 0, a: Math.PI / 2 }); keys.add('ArrowUp'); step(2); keys.clear();
     out.edge = Math.hypot(rocket.x, rocket.y, rocket.z) <= SB;
     Object.assign(rocket, { x: MOON.x, y: MOON.y + MOON.r + 15, z: MOON.z }); step(1 / 60);
@@ -523,7 +524,7 @@ test('space: stars only the rocket can catch, soft bumps, the edge, and the Moon
     out.buggy = [scene, document.getElementById('mode').textContent, tracks.length];
     return out;
   }, STEP);
-  expect(r).toEqual({ stars: [6, true], catch: [1, true], planet: true, edge: true, moon: ['moon', 'rocket'], landed: true,
+  expect(r).toEqual({ stars: [6, true], catch: [1, true], planet: ['planet', 0], edge: true, moon: ['moon', 'rocket'], landed: true,
     buggy: ['moon', 'H = 🚀', 0] });
 });
 
@@ -1198,5 +1199,190 @@ test('with the keyboard: climb into each machine, work it, and everything draws 
     await page.waitForFunction(() => mode === 'car', null, { timeout: 40_000 });
   }
   expect(await glError(page)).toBe(0);
+  expect(problems).toEqual([]);
+});
+
+// ---------- Planet games (#18) ----------
+
+test('planets: towers, balloons, mushrooms and stars are roomy and laid out the same every time', async ({ page }) => {
+  test.setTimeout(150_000); // loads the game twice
+  await open(page);
+  const layout = () => page.evaluate(() => ({ towers: towers.map(t => ({ x: t.x, z: t.z, n: t.n })), rocks: orangeRocks, balloons: balloonStart,
+    mushrooms: mushrooms.map(m => ({ x: m.x, z: m.z, r: m.r, h: m.h })), stars: mushStart }));
+  const r = await layout();
+  expect([r.towers.length, r.balloons.length, r.mushrooms.length, r.stars.length]).toEqual([8, 12, 10, 10]);
+  const bad = await page.evaluate(() => {
+    const out = [], d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+    const check = (list, gap, size, name) => list.forEach((p, i) => {
+      const r = Math.hypot(p.x, p.z), s = size(p);
+      if (r - s < 40) out.push(name + ' middle');
+      if (r + s > PLANET_R - 20) out.push(name + ' edge');
+      if (list.some((q, j) => j !== i && d(p, q) < gap)) out.push(name + ' gap');
+    });
+    check(towers, 70, () => 2, 'tower'); check(balloonStart, 40, () => 3, 'balloon'); check(mushrooms, 60, m => m.r, 'mushroom');
+    if (towers.some(t => t.n < 4 || t.n > 6)) out.push('tower height');
+    if (balloonStart.some(b => b.h < 6 || b.h > 45)) out.push('balloon height');
+    if (mushrooms.some(m => m.r < 6 || m.r > 9 || m.h < 3 || m.h > 6)) out.push('mushroom size');
+    if (mushStart.some(s => s.y < 15 || s.y > 30 || d(s, mushrooms[s.m]) > 6.01)) out.push('star spot');
+    if (orangeRocks.some(k => towers.some(t => d(k, t) < 30))) out.push('rock by a tower');
+    return out;
+  });
+  expect(bad).toEqual([]);
+  await page.reload();
+  await page.waitForFunction(() => T > 0.3);
+  expect(await layout()).toEqual(r);
+});
+
+test('planets: flying into each one lands there, its own vehicle comes out, H goes back, and up leaves above it', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = [];
+    for (let i = 0; i < 3; i++) {
+      setMode('rocket'); enterSpace();
+      const pl = planets[i]; Object.assign(rocket, { x: pl.x, y: pl.y + pl.r + 15, z: pl.z }); step(1 / 60);
+      const where = [scene, planetIx, mode];
+      const landed = step(30, () => mode !== 'rocket') < 30;
+      const car = [mode, document.getElementById('mode').textContent, document.getElementById('help').textContent];
+      keys.add('ArrowUp'); step(3); keys.clear(); step(1);
+      const inside = Math.hypot(me().x, me().z) < PLANET_R - 3;
+      switchVehicle(); const back = [mode, scene, document.getElementById('help').textContent === HELP.rocketMoon];
+      keys.add('KeyW'); const left = step(20, () => scene === 'space') < 20; keys.clear();
+      const above = rocket.y > pl.y + pl.r && Math.hypot(rocket.x - pl.x, rocket.z - pl.z) < 1;
+      out.push({ where, landed, car, inside, back, left, above });
+    }
+    return out;
+  }, STEP);
+  const help = ['Arrows or WASD = drive the monster truck · H = rocket · M = sound',
+    'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound',
+    'Arrows or WASD = drive the bouncy car · H = rocket · M = sound'];
+  ['monster', 'saucer', 'bouncer'].forEach((car, i) => expect(r[i]).toEqual({ where: ['planet', i, 'rocket'], landed: true,
+    car: [car, 'H = 🚀', help[i]], inside: true, back: ['rocket', 'planet', true], left: true, above: true }));
+});
+
+test('tower crash: a fast hit knocks a tower over for a star, a slow one bumps, and it builds itself back up', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnPlanet(0); step(30, () => mode === 'monster');
+    const t = towers[0], run = speed => { // start 15 back from the tower, heading straight at it
+      const a = Math.atan2(t.x, t.z) + Math.PI;
+      Object.assign(monster, { x: t.x - Math.sin(a) * 15, z: t.z - Math.cos(a) * 15, a, v: speed, steer: 0 });
+      keys.clear(); if (speed >= 6) keys.add('ArrowUp');
+      const before = score;
+      for (let i = 0; i < 60 * 3 && t.state === 'up'; i++) { if (speed < 6) monster.v = Math.max(monster.v, Math.min(speed, monster.v + 1)); update(1 / 60); }
+      keys.clear();
+      return { state: t.state, stars: score - before, gap: Math.hypot(monster.x - t.x, monster.z - t.z) };
+    };
+    out.slow = run(4);
+    out.fast = run(15);
+    step(1);
+    out.blocks = [t.blocks.length, Math.max(...t.blocks.map(b => Math.hypot(b.x - t.x, b.z - t.z))) > 3];
+    Object.assign(monster, { x: 0, z: 0, v: 0 }); monster.x = rocket.x + 8;
+    out.back = 1 + step(16, () => t.state === 'up'); // seconds since it fell
+    out.solid = t.state === 'up' && t.blocks.length === 0;
+    return out;
+  }, STEP);
+  expect(r.slow.state).toBe('up');
+  expect(r.slow.stars).toBe(0);
+  expect(r.slow.gap).toBeGreaterThan(3.5);
+  expect(r.fast).toMatchObject({ state: 'down', stars: 1 });
+  expect(r.blocks).toEqual([expect.any(Number), true]);
+  expect(r.back).toBeGreaterThan(11);
+  expect(r.back).toBeLessThan(13);
+  expect(r.solid).toBe(true);
+});
+
+test('balloon pop: touching a balloon pops it for a star, a new one comes far from the saucer, and the saucer stays 3 to 60 up', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnPlanet(1); step(30, () => mode === 'saucer');
+    step(3);
+    const b = balloons[0], before = score;
+    Object.assign(saucer, { x: b.x, y: balloonY(b), z: b.z, v: 0, lift: 0 }); step(1 / 60);
+    out.pop = [score - before, b.wait > 0];
+    step(2.1);
+    out.back = [b.wait <= 0, Math.hypot(b.x - saucer.x, b.z - saucer.z) >= 50, balloons.every(o => o === b || Math.hypot(o.x - b.x, o.z - b.z) >= 40)];
+    out.rises = b.y < b.h;
+    keys.add('KeyW'); step(10); keys.clear();
+    out.top = saucer.y - planetGround(saucer.x, saucer.z);
+    keys.add('KeyS'); step(10); keys.clear();
+    out.low = saucer.y - planetGround(saucer.x, saucer.z);
+    Object.assign(saucer, { x: 0, z: PLANET_R - 10, a: 0, v: 32 }); keys.add('ArrowUp'); step(3); keys.clear();
+    out.edge = Math.hypot(saucer.x, saucer.z) < PLANET_R - 3;
+    return out;
+  }, STEP);
+  expect(r.pop).toEqual([1, true]);
+  expect(r.back).toEqual([true, true, true]);
+  expect(r.rises).toBe(true);
+  expect(r.top).toBeCloseTo(60, 5);
+  expect(r.low).toBeCloseTo(3, 5);
+  expect(r.edge).toBe(true);
+});
+
+test('bouncy mushrooms: a cap throws the car at least 22 up, stars up high count and move to another mushroom', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); landOnPlanet(2); step(30, () => mode === 'bouncer');
+    const m = mushrooms[0], g = planetGround(m.x, m.z), a = Math.atan2(m.x, m.z) + Math.PI;
+    Object.assign(bouncer, { x: m.x - Math.sin(a) * (m.r + 6), z: m.z - Math.cos(a) * (m.r + 6), a, v: 10, vy: 0 });
+    bouncer.y = planetGround(bouncer.x, bouncer.z);
+    keys.add('ArrowUp'); let top = 0; for (let i = 0; i < 60 * 4; i++) { update(1 / 60); if (i === 30) keys.clear(); top = Math.max(top, bouncer.y - g); out.wob = out.wob || m.wob > 0; }
+    keys.clear(); keys.add('ArrowDown'); step(1); keys.clear();
+    out.top = top;
+    step(12, () => bouncer.y <= planetGround(bouncer.x, bouncer.z) && bouncer.vy === 0 && !mushrooms.some(k => Math.hypot(bouncer.x - k.x, bouncer.z - k.z) < k.r));
+    const s = mushStars[0], before = score, sy = planetGround(s.x, s.z) + s.y;
+    Object.assign(bouncer, { x: s.x, y: sy - 1.5, z: s.z, v: 0, vy: 0 }); update(1 / 60);
+    out.star = [score - before, mushStars[0] !== s, mushStars[0].m !== s.m, mushStars.length];
+    const low = mushStars[1], b2 = score; // on the ground under a star: too low to catch it
+    Object.assign(bouncer, { x: low.x, z: low.z, v: 0, vy: 0, y: planetGround(low.x, low.z) - 20 }); update(1 / 60);
+    out.low = score - b2;
+    return out;
+  }, STEP);
+  expect(r.top).toBeGreaterThanOrEqual(22);
+  expect(r.top).toBeLessThanOrEqual(30.5);
+  expect(r.wob).toBe(true);
+  expect(r.star).toEqual([1, true, true, 10]);
+  expect(r.low).toBe(0);
+});
+
+test('planets: a visit starts fresh, stars add to the one counter, and each planet has its own tune', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    setMode('rocket'); enterSpace(); out.space = tuneNow() === SPACE_TUNE;
+    landOnMoon(); out.moon = tuneNow() === SPACE_TUNE;
+    out.tunes = [0, 1, 2].map(i => { landOnPlanet(i); return PLANET_TUNES.indexOf(tuneNow()); });
+    landOnPlanet(0); step(30, () => mode === 'monster');
+    const start = score; topple(towers[1], monster); balloons[0].wait = 1;
+    out.score = [score - start, document.getElementById('hud').textContent === '⭐ ' + score];
+    backInRocket(); leavePlanet(); landOnPlanet(0);
+    out.fresh = [towers.every(t => t.state === 'up'), balloons.every(b => b.wait === 0 && b.y === b.h), score - start];
+    return out;
+  }, STEP);
+  expect(r).toEqual({ space: true, moon: true, tunes: [0, 1, 2], score: [1, true], fresh: [true, true, 1] });
+});
+
+test('with the keyboard: each planet and its vehicle draw without errors, and a drop-out note names the planet', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX'); // start
+  for (const i of [0, 1, 2]) {
+    await page.evaluate(i => { setMode('rocket'); landOnPlanet(i); rocket.y = 2; }, i);
+    await page.waitForFunction(() => mode !== 'rocket', null, { timeout: 60_000 });
+    await page.keyboard.down('ArrowUp');
+    await page.waitForFunction(() => Math.abs(me().v) > 8, null, { timeout: 40_000 });
+    await page.keyboard.up('ArrowUp');
+    const shot = await page.locator('canvas').screenshot();
+    expect(shot.length).toBeGreaterThan(3_000);
+    expect(await glError(page)).toBe(0);
+  }
+  await page.keyboard.press('KeyH');
+  await page.waitForFunction(() => mode === 'rocket', null, { timeout: 10_000 });
+  const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
+  await lose.evaluate(l => l.loseContext());
+  await expect(page.locator('#start small')).toContainText('Graphics dropped out: rocket purple planet');
   expect(problems).toEqual([]);
 });
