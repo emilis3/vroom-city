@@ -66,7 +66,7 @@ cv.addEventListener('webglcontextlost', e => {
 cv.addEventListener('webglcontextrestored', () => location.reload());
 const gpuInfo = gl.getExtension('WEBGL_debug_renderer_info');
 const gpuName = gpuInfo ? gl.getParameter(gpuInfo.UNMASKED_RENDERER_WEBGL) : 'unknown graphics';
-const quality = { shadows: false, maxDpr: 2 }; // the safety net lowers these on slow computers
+const quality = { maxDpr: 2 }; // the safety net lowers this on slow computers
 function resize() {
   const d = Math.min(devicePixelRatio || 1, quality.maxDpr);
   cv.width = Math.round(innerWidth * d); cv.height = Math.round(innerHeight * d);
@@ -75,32 +75,16 @@ addEventListener('resize', resize); resize();
 
 // Every vertex: position, normal, colour, material (0 lit, 1 water, 2 glow halo, 3 bright light)
 const VS = `attribute vec3 aPos, aNor; attribute vec4 aCol;
-uniform mat4 uVP, uM, uLVP; uniform mat3 uNM;
-varying vec3 vN, vW; varying vec4 vC, vL;
+uniform mat4 uVP, uM; uniform mat3 uNM;
+varying vec3 vN, vW; varying vec4 vC;
 void main() {
   vec4 w = uM * vec4(aPos, 1.0); vW = w.xyz;
   vN = uNM * aNor; vC = aCol;
-  vL = uLVP * vec4(w.xyz + normalize(vN) * 0.15, 1.0); // nudged along the normal so faces don't shadow themselves
   gl_Position = uVP * w;
 }`;
 const FS = `precision highp float;
-varying vec3 vN, vW; varying vec4 vC, vL;
-uniform vec3 uTint, uCam, uSun, uHaze; uniform vec2 uFog; uniform float uAlpha, uTime, uShadowOn, uTexel;
-uniform sampler2D uShadow;
-float sunlit() {
-  if (uShadowOn < 0.5) return 1.0;
-  vec3 p = vL.xyz / vL.w * 0.5 + 0.5;
-  vec2 e = min(p.xy, 1.0 - p.xy);
-  float edge = smoothstep(0.0, 0.08, min(e.x, e.y)); // shadows fade out at the edge of the shadow area
-  if (edge <= 0.0 || p.z >= 1.0) return 1.0;
-  float s = 0.0, z = p.z - 0.00005;
-  vec2 t = p.xy / uTexel - 0.5, f = fract(t), b = (floor(t) + 0.5) * uTexel;
-  for (int i = -1; i <= 2; i++) for (int j = -1; j <= 2; j++) { // 4x4 texels, edge ones weighted for smooth soft edges
-    float w = (i == -1 ? 1.0 - f.x : i == 2 ? f.x : 1.0) * (j == -1 ? 1.0 - f.y : j == 2 ? f.y : 1.0);
-    s += w * (z <= texture2D(uShadow, b + vec2(float(i), float(j)) * uTexel).r ? 1.0 : 0.0);
-  }
-  return mix(1.0, s / 9.0, edge);
-}
+varying vec3 vN, vW; varying vec4 vC;
+uniform vec3 uTint, uCam, uSun, uHaze; uniform vec2 uFog; uniform float uAlpha, uTime;
 void main() {
   vec3 n = normalize(vN), col = vC.rgb * uTint, c;
   float m = vC.a, f = smoothstep(uFog.x, uFog.y, distance(vW, uCam));
@@ -112,7 +96,7 @@ void main() {
   else {
     float ndl = max(dot(n, uSun), 0.0);
     vec3 amb = mix(vec3(0.40, 0.38, 0.35), vec3(0.50, 0.53, 0.58), n.y * 0.5 + 0.5); // sky light from above, ground bounce below
-    c = col * (amb + vec3(1.0, 0.96, 0.86) * 0.56 * ndl * (ndl > 0.0 ? sunlit() : 1.0));
+    c = col * (amb + vec3(1.0, 0.96, 0.86) * 0.56 * ndl);
     if (m > 0.5) { // water: slow ripples with little sparkles
       float r = sin(vW.x * 0.35 + uTime * 1.3) * sin(vW.z * 0.3 - uTime * 1.1) + 0.5 * sin((vW.x + vW.z) * 0.8 + uTime * 2.0);
       c *= 1.0 + 0.07 * r; c += vec3(0.3) * pow(max(r - 0.9, 0.0) / 0.6, 2.0);
@@ -120,9 +104,6 @@ void main() {
   }
   gl_FragColor = vec4(mix(c, uHaze, f), uAlpha);
 }`;
-// Shadow pass: depth only, as seen from the sun
-const SVS = `attribute vec3 aPos; uniform mat4 uLVP, uM; void main() { gl_Position = uLVP * uM * vec4(aPos, 1.0); }`;
-const SFS = `precision mediump float; void main() { gl_FragColor = vec4(1.0); }`;
 // Sky: one big triangle behind everything, pale at the horizon, deep blue above, with a soft sun
 const KVS = `attribute vec3 aPos; varying vec2 vP; void main() { vP = aPos.xy; gl_Position = vec4(aPos.xy, 0.0, 1.0); }`;
 const KFS = `precision highp float; varying vec2 vP;
@@ -145,8 +126,7 @@ function shader(type, src) {
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
   return s;
 }
-const UNIFORMS = ['uVP', 'uM', 'uNM', 'uLVP', 'uTint', 'uCam', 'uSun', 'uHaze', 'uFog', 'uAlpha', 'uTime', 'uShadowOn', 'uTexel',
-  'uShadow', 'uF', 'uR', 'uU', 'uTop', 'uTan', 'uSpace'];
+const UNIFORMS = ['uVP', 'uM', 'uNM', 'uTint', 'uCam', 'uSun', 'uHaze', 'uFog', 'uAlpha', 'uTime', 'uF', 'uR', 'uU', 'uTop', 'uTan', 'uSpace'];
 function program(vs, fs) {
   const p = gl.createProgram();
   gl.attachShader(p, shader(gl.VERTEX_SHADER, vs)); gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs));
@@ -157,32 +137,11 @@ function program(vs, fs) {
   for (const n of UNIFORMS) u[n] = gl.getUniformLocation(p, n);
   return u;
 }
-const MAIN = program(VS, FS), SHADOWP = program(SVS, SFS), SKYP = program(KVS, KFS);
+const MAIN = program(VS, FS), SKYP = program(KVS, KFS);
 let prog = MAIN; // the program in use
 function use(p) { prog = p; gl.useProgram(p.p); }
 for (const i of [0, 1, 2]) gl.enableVertexAttribArray(i);
 gl.enable(gl.DEPTH_TEST);
-
-// Shadow map: the sun's view of everything near the player, kept in a depth texture
-const SM = 2048, SH = 130; // texture size, half-width of the shadow area in world units
-const depthExt = gl.getExtension('WEBGL_depth_texture');
-const shadowTex = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, shadowTex);
-for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST],
-  [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
-let shadowFB = null;
-if (depthExt) {
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, SM, SM, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
-  const colour = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, colour);
-  gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA4, SM, SM);
-  shadowFB = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFB);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shadowTex, 0);
-  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, colour);
-  quality.shadows = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-}
-// no shadows possible: a 1x1 white texture keeps the shader happy
-if (!quality.shadows) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
 
 function makeBuffer(arr) {
   const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
@@ -720,7 +679,7 @@ function inStation(x, z) {
 }
 // ---------- Construction site, out in the countryside at the end of a dirt track from a town road ----------
 // Its spot is worked out without rnd() too, so the town, mountains, lake and stars stay exactly where they were.
-const YW = 35, YD = 25, TRACK = 40, TRACKW = 8, GATEW = 12; // half the yard's width and depth, the track's length and width, the gate's width
+const YW = 60, YD = 45, TRACK = 40, TRACKW = 8, GATEW = 12; // half the yard's width and depth, the track's length and width, the gate's width
 const site = (() => {
   let best = null;
   for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (let i = 1; i <= 6; i++) {
@@ -804,7 +763,7 @@ station.firstSolid = solids.length; // the station's solids come last
     put(ICO1, side * (TRACKW / 2 + .5 + wob(k + 40) * .6), 0, -YD - TRACK + (k + .5) * TRACK / 16, s * 1.6, s * .7, s * 1.6, TRACKC);
   }
   put(BOX, 0, .03, 0, 2 * YW, .06, 2 * YD, SANDY); // the yard
-  for (let k = 0; k < 8; k++) put(DISC, (wob(k + 7) - .5) * 2 * (YW - 6), .065, (wob(k + 21) - .5) * 2 * (YD - 6), 9, .01, 6, RUT); // worn patches
+  for (let k = 0; k < 20; k++) put(DISC, (wob(k + 7) - .5) * 2 * (YW - 6), .065, (wob(k + 21) - .5) * 2 * (YD - 6), 9, .01, 6, RUT); // worn patches
   // fence: two rails and a post every few steps, the gap in the middle of the near side is the gate
   const fenceSeg = (lx0, lz0, lx1, lz1) => {
     const cx = (lx0 + lx1) / 2, cz = (lz0 + lz1) / 2, w = Math.abs(lx1 - lx0) || .3, d = Math.abs(lz1 - lz0) || .3;
@@ -820,11 +779,11 @@ station.firstSolid = solids.length; // the station's solids come last
   put(BOX, 0, 4.7, -YD, GATEW + 1, 1.4, .3, SIGN);
   for (let k = -2; k <= 2; k++) put(BOX, k * 2.2, 4.7, -YD - .2, .9, 1.4, .1, DARK); // dark warning stripes
   // a site cabin in the corner by the gate
-  const [cabX, cabZ] = site.world(-29, -19);
-  put(BOX, -29, 1.5, -19, 6, 3, 4, RAIL); put(BOX, -29, 3.15, -19, 6.4, .3, 4.4, hex(0x1e88e5));
-  put(BOX, -29, 1.6, -21.01, 1.2, 1.2, .06, GLASSW, 3); put(BOX, -26.8, 1.6, -21.01, 1.2, 1.2, .06, GLASSW, 3);
+  const CABX = -YW + 6, CABZ = -YD + 6, [cabX, cabZ] = site.world(CABX, CABZ);
+  put(BOX, CABX, 1.5, CABZ, 6, 3, 4, RAIL); put(BOX, CABX, 3.15, CABZ, 6.4, .3, 4.4, hex(0x1e88e5));
+  put(BOX, CABX, 1.6, CABZ - 2.01, 1.2, 1.2, .06, GLASSW, 3); put(BOX, CABX + 2.2, 1.6, CABZ - 2.01, 1.2, 1.2, .06, GLASSW, 3);
   solid(cabX, cabZ, Math.abs(site.ox) ? 4.4 : 6.4, Math.abs(site.ox) ? 6.4 : 4.4, 3.3);
-  for (const [cx, cz] of [[-8, -22], [8, -22], [-6, -24], [6, -24], [30, -20], [-31, 20], [31, 20], [0, 22]]) { // traffic cones
+  for (const [cx, cz] of [[-8, 3 - YD], [8, 3 - YD], [-6, 1 - YD], [6, 1 - YD], [YW - 5, 5 - YD], [4 - YW, YD - 5], [YW - 4, YD - 5], [0, YD - 3]]) { // traffic cones
     put(frustumShape(.3), cx, .55, cz, .9, 1.1, .9, hex(0xff6d00));
     put(BOX, cx, .08, cz, 1.1, .16, 1.1, hex(0xff6d00));
   }
@@ -849,7 +808,7 @@ function groundAt(x, z, m = 0) {
 // ---------- Sounds ----------
 // Everything plays into one master volume, then a soft limiter, so lots of sounds at once never get sharply loud.
 let ac = null, muted = false, master, limiter, noiseBuf, engOscs = [], engGain, lfoDepth, roarGain;
-let rotorLfo, rotorGain, squealGain, siteGain, rotorSpin = 0, lastHorn = -9, lastToot = -9;
+let rotorLfo, rotorGain, squealGain, rotorSpin = 0, lastHorn = -9, lastToot = -9;
 function initAudio() {
   try {
     ac = new AudioContext();
@@ -883,9 +842,6 @@ function initAudio() {
     squealGain = gain(0); noise().connect(filter('bandpass', 2300, 9)).connect(squealGain).connect(master);
     // the rocket's roar: deep rumbling noise
     roarGain = gain(0); noise().connect(filter('lowpass', 420)).connect(roarGain).connect(master);
-    // the construction site's machines working on their own: a low rumble that only plays when one is near
-    siteGain = gain(0); const rumble = ac.createOscillator(); rumble.type = 'sawtooth'; rumble.frequency.value = 52;
-    rumble.connect(filter('lowpass', 260)).connect(siteGain).connect(master); rumble.start();
   } catch { ac = null; engGain = null; } // no sound on this browser; the game plays on silently
 }
 function toggleMute() {
@@ -989,20 +945,22 @@ const me = () => ({ car, boat, heli, rocket, buggy, digger, truck, dozer, crane,
 // ---------- Construction site: the four machines, dirt piles and toy blocks ----------
 // x, z and a (the heading, or the crane's arm) are in the world; r is how much room a machine takes up.
 const spot = (lx, lz, la) => { const [x, z] = site.world(lx, lz); return { x, y: 0, z, a: site.a + la }; };
-const digger = { kind: 'digger', ...spot(-25, 0, 0), v: 0, steer: 0, spin: 0, r: 3, load: 0, act: null };
-const truck = { kind: 'truck', ...spot(-18.4, 0, 0), v: 0, steer: 0, spin: 0, r: 3.4, load: 0, act: null, phase: 'load', wait: 0 };
-const dozer = { kind: 'dozer', ...spot(0, -10, Math.PI / 2), v: 0, steer: 0, spin: 0, r: 3, blade: 0, bladeT: 0, leg: 0, jobT: 0, skip: null };
-const crane = { kind: 'crane', ...spot(25, 10, 0), v: 0, r: 3.4, reach: 10, hy: 20, held: null, act: null, dir: 'build' };
+// they start well apart, each in its own corner of the yard with dirt (or the crane's blocks) close by
+const digger = { kind: 'digger', ...spot(-38, 5, 0), v: 0, steer: 0, spin: 0, r: 3, load: 0, act: null };
+const truck = { kind: 'truck', ...spot(-14, -28, 0), v: 0, steer: 0, spin: 0, r: 3.4, load: 0, act: null };
+const dozer = { kind: 'dozer', ...spot(8, -15, Math.PI / 2), v: 0, steer: 0, spin: 0, r: 3, blade: 0, bladeT: 0 };
+const crane = { kind: 'crane', ...spot(38, 15, 0), v: 0, r: 3.4, reach: 10, hy: 20, held: null, act: null };
 const machines = [digger, truck, dozer, crane];
-for (const m of machines) Object.assign(m, { home: { x: m.x, z: m.z, a: m.a }, auto: false, blocked: 0, round: 0, beepT: 0 });
+for (const m of machines) m.beepT = 0;
 const MACHINE_ICON = { digger: '🚜', truck: '🚚', dozer: '🚜', crane: '🏗️' };
 const isMachine = md => md in MACHINE_ICON;
-const REACH = 6.6, MAXPILES = 12, TRUCKMAX = 4, HOOKUP = 20, STACKMAX = 8;
+const REACH = 6.6, MAXPILES = 20, TRUCKMAX = 4, HOOKUP = 20, STACKMAX = 8;
 const piles = [], blocks = [];
 function addPile(lx, lz, amount, refill = false) { const [x, z] = site.world(lx, lz); piles.push({ x, z, amount, spread: 1, refill, t: 0 }); }
-addPile(-25, 9.5, 40, true); addPile(-2, 6, 3); addPile(10, -6, 2); // the big pile the digger works on, and two small ones
+addPile(-38, 14.5, 40, true); // the big pile in front of the digger, which fills up again
+for (const [lx, lz] of [[19, -15], [-32, -22], [-8, 14], [46, -28], [8, 33]]) addPile(lx, lz, 25); // and five more for everyone to move
 for (let i = 0; i < 10; i++) { // ten toy blocks in two rows next to the crane
-  const [x, z] = site.world(17 + (i % 5) * 2.6, i < 5 ? 17 : 20);
+  const [x, z] = site.world(30 + (i % 5) * 2.6, i < 5 ? 22 : 25);
   blocks.push({ x, z, y: 0, held: false, col: RAINBOW[i % 6] });
 }
 
@@ -1749,9 +1707,7 @@ const PLANET_TUNES = [
 ];
 const tuneNow = () => scene === 'planet' ? PLANET_TUNES[planetIx] : SPACE_TUNE;
 let musicT = 0, musicI = 0;
-// ---------- Construction site: driving, working, and the jobs the machines do by themselves ----------
-const LOAD = site.world(-18.4, 0), TIPSPOT = site.world(5, 14), STACK = site.world(25, -5), PATROL = site.world(24, -13);
-const SLOTS = Array.from({ length: 10 }, (_, i) => site.world(17 + (i % 5) * 2.6, i < 5 ? 17 : 20));
+// ---------- Construction site: driving and working. A machine only moves while someone is in it ----------
 const SPEC = { digger: { vmax: 8, turn: 1.5 }, truck: { vmax: 11, turn: 1.1 }, dozer: { vmax: 9, turn: 1.3 } }; // top speeds are about half the car's
 const ACT_TIME = { scoop: 1.8, dump: 1.6, tip: 2.6, grab: 2.2, release: 2.2 }, MAST = 24.6; // seconds each job takes; the height of the crane's arm
 const inYard = (x, z, m = 0) => { const [lx, lz] = site.local(x, z); return Math.abs(lx) < YW - m && Math.abs(lz) < YD - m; };
@@ -1759,7 +1715,6 @@ const clampYard = (x, z, m = 2) => {
   const [lx, lz] = site.local(x, z);
   return site.world(Math.max(-YW + m, Math.min(YW - m, lx)), Math.max(-YD + m, Math.min(YD - m, lz)));
 };
-const angDiff = (a, b) => { const d = (b - a) % (2 * Math.PI); return d > Math.PI ? d - 2 * Math.PI : d < -Math.PI ? d + 2 * Math.PI : d; };
 const ease = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
 const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
 const pileR = p => (1.2 + .5 * Math.sqrt(p.amount)) * Math.sqrt(p.spread);
@@ -1818,7 +1773,7 @@ function driveMachine(m, up, down, left, right, dt, cap = 1) {
   else m.v *= Math.pow(.2, dt);
   m.v = Math.max(-4, Math.min(S.vmax * cap, m.v));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
-  m.steer = m.auto ? target : m.steer + (target - m.steer) * Math.min(1, dt * 6);
+  m.steer += (target - m.steer) * Math.min(1, dt * 6);
   m.a += m.steer * S.turn * dt * Math.max(.6, Math.min(1, Math.abs(m.v) / 3)) * (m.v < -.5 ? -1 : 1);
   m.spin += m.v * dt / 1.1;
   const nx = m.x + Math.sin(m.a) * m.v * dt, nz = m.z + Math.cos(m.a) * m.v * dt;
@@ -1874,17 +1829,20 @@ function actEffect(m, kind) {
 }
 // a block is never put down on a machine or the car
 const spotTaken = (x, z) => machines.some(o => Math.hypot(o.x - x, o.z - z) < o.r + 1.2) || (mode === 'car' && Math.hypot(car.x - x, car.z - z) < 3.8);
+// where a block let go of now would land: on the stack under the hook, or when that is full, on the ground beside it
+function dropSpot(c) {
+  const [hx, hz] = hookAt(c);
+  if (spotTaken(hx, hz)) return null;
+  const top = stackTop(hx, hz);
+  if (top <= (STACKMAX - 1) * 2) return [hx, hz, top];
+  for (const [dx, dz] of [[2.4, 0], [-2.4, 0], [0, 2.4], [0, -2.4]])
+    if (stackTop(hx + dx, hz + dz) === 0 && !spotTaken(hx + dx, hz + dz)) return [hx + dx, hz + dz, 0];
+  return null;
+}
 function releaseBlock(c) {
   const b = c.held;
   if (!b) return;
-  const [hx, hz] = hookAt(c);
-  let at = null; // on the stack under the hook, or when that is full, on the ground beside it
-  if (!spotTaken(hx, hz)) {
-    const top = stackTop(hx, hz);
-    if (top <= (STACKMAX - 1) * 2) at = [hx, hz, top];
-    else for (const [dx, dz] of [[2.4, 0], [-2.4, 0], [0, 2.4], [0, -2.4]])
-      if (!at && stackTop(hx + dx, hz + dz) === 0 && !spotTaken(hx + dx, hz + dz)) at = [hx + dx, hz + dz, 0];
-  }
+  const at = dropSpot(c);
   if (!at) { const v = siteVol(c); if (v > 0) tone(150, .15, 'square', .05 * v, 0, 100); return; } // no room: it stays in the hook
   Object.assign(b, { x: at[0], z: at[1], y: at[2], held: false });
   c.held = null; thud(c);
@@ -1902,101 +1860,10 @@ function craneHeight(c) {
   return a.p < .5 ? HOOKUP + (a.hy - HOOKUP) * ease(a.p / .45) : a.hy + (HOOKUP - a.hy) * ease((a.p - .55) / .45);
 }
 
-// ---- jobs when nobody is in the machine ----
-function blockedAhead(m) { // the car or another machine in the way: 'car', 'machine' or false
-  const x = m.x + Math.sin(m.a) * 4.5, z = m.z + Math.cos(m.a) * 4.5;
-  if (mode === 'car' && Math.hypot(car.x - x, car.z - z) < 6) return 'car';
-  return machines.some(o => o !== m && Math.hypot(o.x - x, o.z - z) < o.r + 1.5) && 'machine';
-}
-// drive towards a spot; true once there (or once it has been stuck behind something for 10 s, to move on to the next job).
-// It waits for the car; after 2 s behind a machine that isn't moving off, it steers round it.
-function goTo(m, tx, tz, dt, tol = 2.5) {
-  if (Math.hypot(tx - m.x, tz - m.z) < tol) { m.blocked = 0; driveMachine(m, false, false, false, false, dt); return true; }
-  const df = angDiff(m.a, Math.atan2(tx - m.x, tz - m.z)), stop = blockedAhead(m);
-  m.blocked = stop ? m.blocked + dt : 0;
-  if (m.blocked > 10) { m.blocked = 0; return true; }
-  if (stop === 'machine' && m.blocked > 2) m.round = 1.5; // swing away from it, then a bit more
-  if (m.round > 0) { m.round -= dt; driveMachine(m, true, false, false, true, dt, .4); return false; }
-  driveMachine(m, !stop && Math.abs(df) < .9, false, df > .05, df < -.05, dt, .6);
-  return false;
-}
-function faceTo(m, tx, tz, dt) {
-  const df = angDiff(m.a, Math.atan2(tx - m.x, tz - m.z));
-  driveMachine(m, false, false, df > .05, df < -.05, dt, .6);
-  return Math.abs(df) <= .06;
-}
-function autoDigger(d, dt) {
-  if (d.act) { driveMachine(d, false, false, false, false, dt); return; }
-  let pile = null;
-  for (const p of piles) if (Math.hypot(p.x - d.x, p.z - d.z) < 14 && (!pile || p.amount > pile.amount)) pile = p;
-  if (!pile) { // back to its spot, or after the big pile if that has been pushed somewhere else
-    const big = piles.find(p => p.refill);
-    if (big && Math.hypot(big.x - d.home.x, big.z - d.home.z) > 14) goTo(d, big.x, big.z, dt, 9); else goTo(d, d.home.x, d.home.z, dt, 1);
-    return;
-  }
-  let aim = pile;
-  if (d.load && Math.hypot(truck.x - d.x, truck.z - d.z) < 12 && truck.load < TRUCKMAX && Math.abs(truck.v) < .5) aim = truck; // loads the truck when it waits
-  if (faceTo(d, aim.x, aim.z, dt)) startAct(d);
-}
-function autoTruck(t, dt) {
-  if (t.act) { driveMachine(t, false, false, false, false, dt); return; }
-  if (t.phase === 'load') {
-    if (goTo(t, LOAD[0], LOAD[1], dt, 2)) {
-      t.wait += dt;
-      if (t.load >= TRUCKMAX || (t.load && t.wait > 25)) { t.phase = 'go'; t.wait = 0; }
-    }
-  } else if (t.phase === 'go') {
-    if (goTo(t, TIPSPOT[0], TIPSPOT[1], dt, 2.5) && Math.abs(t.v) < 1) { startAct(t); t.phase = 'back'; }
-  } else if (goTo(t, LOAD[0], LOAD[1], dt, 2)) { t.phase = 'load'; t.wait = 0; }
-}
-function autoDozer(z, dt) {
-  let small = null, sd = Infinity;
-  for (const p of piles) { // small piles get pushed flat
-    if (p.refill || p.amount > 6 || !inYard(p.x, p.z, 2) || (z.skip && z.skip.p === p && T < z.skip.until)) continue;
-    const d = Math.hypot(p.x - z.x, p.z - z.z);
-    if (d < sd) { sd = d; small = p; }
-  }
-  if (z.target !== small) { z.target = small; z.jobT = 0; }
-  if (small) {
-    z.bladeT = 1; z.jobT += dt;
-    if (z.jobT > 25) { z.skip = { p: small, until: T + 40 }; z.jobT = 0; }
-    goTo(z, small.x, small.z, dt, .5);
-  } else { // nothing to push: drive slowly back and forth
-    z.bladeT = 0;
-    const [tx, tz] = z.leg ? PATROL : [z.home.x, z.home.z];
-    if (goTo(z, tx, tz, dt, 2.5)) z.leg ^= 1;
-  }
-}
-// swing the arm and move the hook towards a spot; true once it is right above it
-function aimCrane(c, tx, tz, dt) {
-  const da = angDiff(c.a, Math.atan2(tx - c.x, tz - c.z)), want = Math.max(5, Math.min(24, Math.hypot(tx - c.x, tz - c.z))), dr = want - c.reach;
-  c.a += Math.max(-.6 * dt, Math.min(.6 * dt, da));
-  c.reach += Math.max(-6 * dt, Math.min(6 * dt, dr));
-  return Math.abs(da) < .02 && Math.abs(dr) < .2;
-}
-const isTop = b => !blocks.some(o => o !== b && !o.held && o.y > b.y && Math.abs(o.x - b.x) < 2 && Math.abs(o.z - b.z) < 2);
-const reachable = (c, b) => { const d = Math.hypot(b.x - c.x, b.z - c.z); return d > 5 && d < 24; };
-function autoCrane(c, dt) {
-  if (c.act) return;
-  const near = (x, z) => Math.hypot(x - STACK[0], z - STACK[1]) < 3;
-  if (c.held) { // build the tower; once all blocks are in it, put them back in their row
-    let target = STACK;
-    if (c.dir === 'clear') target = SLOTS.find(s => !blocks.some(b => !b.held && Math.hypot(b.x - s[0], b.z - s[1]) < 2.3)) || STACK;
-    if (aimCrane(c, target[0], target[1], dt) && !spotTaken(target[0], target[1])) startAct(c); // something under the hook: wait
-    return;
-  }
-  let pick = null, pd = Infinity;
-  for (const b of blocks) {
-    if (b.held || !isTop(b) || !reachable(c, b) || near(b.x, b.z) !== (c.dir === 'clear')) continue;
-    const d = Math.hypot(b.x - c.x, b.z - c.z) - (c.dir === 'clear' ? b.y * 10 : 0);
-    if (d < pd) { pd = d; pick = b; }
-  }
-  if (!pick) { c.dir = c.dir === 'build' ? 'clear' : 'build'; return; }
-  if (aimCrane(c, pick.x, pick.z, dt)) startAct(c);
-}
 function pushPiles(z, dt) { // the blade pushes dirt along and spreads it flat
   z.blade += (z.bladeT - z.blade) * Math.min(1, dt * 4);
   if (z.blade < .6) return;
+  if (mode !== 'dozer') return; // parked, the blade rests on the dirt without moving it
   const fx0 = z.x + Math.sin(z.a) * 3.3, fz0 = z.z + Math.cos(z.a) * 3.3;
   for (let i = piles.length - 1; i >= 0; i--) {
     const p = piles[i];
@@ -2009,12 +1876,7 @@ function pushPiles(z, dt) { // the blade pushes dirt along and spreads it flat
 }
 function updateSite(dt) {
   for (const m of machines) {
-    m.auto = m.kind !== mode;
-    if (!m.auto) driveByKid(m, dt);
-    else if (m.kind === 'digger') autoDigger(m, dt);
-    else if (m.kind === 'truck') autoTruck(m, dt);
-    else if (m.kind === 'dozer') autoDozer(m, dt);
-    else autoCrane(m, dt);
+    if (m.kind === mode) driveByKid(m, dt); // the others stay where they were left; a job already started finishes
     updateAct(m, dt);
     if (m.kind === 'dozer') pushPiles(m, dt);
     if (m.kind === 'crane') {
@@ -2029,11 +1891,6 @@ function updateSite(dt) {
     if (p.spread > 1) p.spread = Math.max(1, p.spread - dt * .03);
     if (p.amount < 40 && (p.t += dt) >= 5) { p.t -= 5; p.amount++; }
     if (p.amount >= 40) p.t = 0;
-  }
-  if (siteGain) { // the rumble of the machines working by themselves
-    let level = 0;
-    for (const m of machines) if (m.auto && (Math.abs(m.v) > .3 || m.act)) level += siteVol(m);
-    siteGain.gain.setTargetAtTime(Math.min(.06, level * .12), ac.currentTime, .2);
   }
 }
 // climbing in and out
@@ -2058,7 +1915,7 @@ function leaveMachine() { // the car appears next to the machine, on free ground
       if (inYard(x, z, 2.5) && !hits(x, z)) spot = { x, z };
     }
   Object.assign(car, spot || { x: m.x, z: m.z }, { a: m.a, v: 0, steer: 0 });
-  m.v = 0; setMode('car'); tone(180, .15, 'square', .05, 0, 120); puff(car.x, 1, car.z, 12);
+  m.v = 0; m.steer = 0; setMode('car'); tone(180, .15, 'square', .05, 0, 120); puff(car.x, 1, car.z, 12);
 }
 
 function update(dt) {
@@ -2197,14 +2054,14 @@ function makePerfWatch(limitMs = 25, secs = 3, warmup = 2) {
   };
 }
 const perfWatch = makePerfWatch();
-function lowerQuality() { quality.shadows = false; quality.maxDpr = 1; resize(); }
+function lowerQuality() { quality.maxDpr = 1; resize(); }
 if (easy) lowerQuality(); // the graphics dropped out here before, so go easy on this computer from the start
 
 // ---------- Drawing ----------
 const ID = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], WHITE = [1, 1, 1], NM = new Float32Array(9);
 const SUN = norm([0.4, 0.8, 0.3]), HAZE = hex(0xc4e6ff), TOP = hex(0x58adf0);
 const RED = hex(0xe53935), DARKRED = hex(0xb71c1c), GLASS = hex(0xb3e5fc), TYRE = hex(0x222222), HUB = hex(0xcfd8dc),
-      LIGHT = hex(0xfff59d), TAIL = hex(0xff1744), SHADOW = hex(0x2f3a2f), GOLD = hex(0xffd600),
+      LIGHT = hex(0xfff59d), TAIL = hex(0xff1744), GOLD = hex(0xffd600),
       HELI = hex(0xffb300), HELIDARK = hex(0x37474f), BLADE = hex(0x263238);
 const build = f => { const out = []; f((shape, x, y, z, w, h, d, col, mat = 0, yaw = 0) => mesh(shape, x, y, z, w, h, d, yaw, col, mat, out)); return toMesh(out); };
 const cube = build(o => o(BOX, 0, 0, 0, 1, 1, 1, WHITE)), ball = build(o => o(ICO1, 0, 0, 0, 1, 1, 1, WHITE));
@@ -2558,9 +2415,6 @@ function mRY(a) { const c = Math.cos(a), s = Math.sin(a); return [c, 0, -s, 0, 0
 function mRX(a) { const c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]; }
 function mRZ(a) { const c = Math.cos(a), s = Math.sin(a); return [c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]; }
 const chain = (...ms) => ms.reduce(mul);
-function ortho(l, r, b, t, n, f) {
-  return [2 / (r - l), 0, 0, 0, 0, 2 / (t - b), 0, 0, 0, 0, -2 / (f - n), 0, -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1];
-}
 // draw a mesh placed by `model` (turns and per-axis stretches only, so normals just undo the stretch)
 function draw3(m, model, tint = WHITE, alpha = 1) {
   bind(m.buf);
@@ -2621,11 +2475,37 @@ function drawCrane(c) {
   dbox(hx, (MAST - .3 + c.hy) / 2, hz, .1, MAST - .3 - c.hy, .1, 0, STEELDARK); // the rope
   dbox(hx, c.hy, hz, .6, .5, .6, c.a, hex(0xd32f2f)); // the hook
 }
+// the dirt's height at a spot, so the crane's cross lies on top of a pile instead of inside it
+function dirtTop(x, z) {
+  let y = 0;
+  for (const p of piles) { const q = Math.hypot(p.x - x, p.z - z) / pileR(p); if (q < 1) y = Math.max(y, pileH(p) * Math.sqrt(1 - q * q)); }
+  return y;
+}
+// the crane's aiming cross: straight under the hook, on the ground, a pile or the block or stack there; green over a block to grab
+function craneAim(c) {
+  if (c.act) return null; // hidden while the hook goes down and up
+  const [hx, hz] = hookAt(c);
+  if (c.held) { const at = dropSpot(c); return at ? { x: at[0], z: at[1], y: at[2] ? at[2] : dirtTop(at[0], at[1]), green: false } : { x: hx, z: hz, y: Math.max(stackTop(hx, hz), dirtTop(hx, hz)), green: false }; }
+  const b = blockUnder(hx, hz);
+  return b ? { x: hx, z: hz, y: b.y + 2, green: true } : { x: hx, z: hz, y: dirtTop(hx, hz), green: false };
+}
+const AIMW = hex(0xffffff), AIMO = hex(0xff9100), AIMG = hex(0x00e676), AIMGO = hex(0x00a152);
+function drawAim(c) {
+  const a = craneAim(c);
+  if (!a) return;
+  for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) a.y = Math.max(a.y, dirtTop(a.x + dx, a.z + dz)); // no ends buried in a pile
+  for (const k of [1, -1]) { // two crossed bars, each over a slightly bigger outline
+    const yaw = c.a + k * Math.PI / 4;
+    dbox(a.x, a.y + .06, a.z, .95, .1, 2.9, yaw, a.green ? AIMGO : AIMO);
+    dbox(a.x, a.y + .1, a.z, .55, .1, 2.5, yaw, a.green ? AIMG : AIMW);
+  }
+}
 function drawSite() {
   if (Math.hypot(me().x - site.x, me().z - site.z) > 300) return; // too far away to see
   for (const p of piles) draw3(ball, chain(mT(p.x, 0, p.z), mS(2 * pileR(p), 2 * pileH(p), 2 * pileR(p))), DIRTC);
   for (const b of blocks) draw3(blockMesh, mT(b.x, b.y + 1, b.z), b.col);
   drawDigger(digger); drawTruck(truck); drawDozer(dozer); drawCrane(crane);
+  if (mode === 'crane') drawAim(crane);
 }
 
 function drawCar() {
@@ -2659,17 +2539,6 @@ function drawStars() {
     draw3(starMesh, chain(mT(s.x, y, s.z), mRY(T * 2 + s.phase), mS(sz, sz, sz)));
   }
 }
-// the old dark patches, used only when there are no real shadows
-function drawBlobShadows() {
-  if (mode === 'car') dbox(car.x, .16, car.z, 2.6, .04, 4.6, car.a, SHADOW);
-  else if (mode === 'boat') { if (boat.hop > 0) dbox(boat.x, .22, boat.z, 2.4, .02, 5, boat.a, SHADOW); }
-  else if (mode === 'heli') {
-    const g = groundAt(heli.x, heli.z), s = Math.max(1, 4 - (heli.y - g) * .03);
-    dbox(heli.x, g + .16, heli.z, s, .04, s * 1.6, heli.a, SHADOW);
-  }
-  for (const s of stars) if (!s.sky) dbox(s.x, .16, s.z, 1.8, .03, 1.8, 0, SHADOW);
-  for (const m of machines) dbox(m.x, .16, m.z, 2 * m.r, .04, 2.4 * m.r, m.a, SHADOW);
-}
 // the rocket's bottom centre: parked on the pad, climbing over it, leaning into flight in space, or on the Moon
 function rocketBase() {
   if (scene === 'space') return chain(mT(rocket.x, rocket.y, rocket.z), mRY(rocket.a), mRX(rocket.pitch), mT(0, -9, 0));
@@ -2686,22 +2555,6 @@ function solidThings() {
   drawAnimals();
   drawStars();
   drawSite();
-}
-// render the sun's view of everything near `focus` into the shadow map; returns the sun's view-projection
-function shadowPass(focus) {
-  const lv = lookAt(SUN.map(v => v * 600), [0, 0, 0], [0, 1, 0]), texel = 2 * SH / SM;
-  const snap = v => Math.round(v / texel) * texel; // move in whole texels so shadow edges don't shimmer
-  const lx = snap(lv[0] * focus[0] + lv[4] * focus[1] + lv[8] * focus[2] + lv[12]);
-  const ly = snap(lv[1] * focus[0] + lv[5] * focus[1] + lv[9] * focus[2] + lv[13]);
-  const lvp = mul(ortho(lx - SH, lx + SH, ly - SH, ly + SH, 1, 900), lv);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFB); gl.viewport(0, 0, SM, SM);
-  gl.clear(gl.DEPTH_BUFFER_BIT);
-  use(SHADOWP); gl.uniformMatrix4fv(prog.uLVP, false, lvp);
-  gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT); // back faces only: lit faces never shadow themselves
-  solidThings();
-  gl.cullFace(gl.BACK);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  return lvp;
 }
 
 const SPACEHAZE = [.02, .022, .075]; // about the colour of space looking down, so the fading world blends into it
@@ -2834,7 +2687,7 @@ function nearPlane() {
   return Math.max(.5, Math.min(rocket.y * .1, toRocket * .5));
 }
 function draw() {
-  const k = snapCam ? 1 : 1 - Math.exp(-dtDraw * 4), v = me(), goal = camGoal();
+  const k = snapCam ? 1 : 1 - Math.exp(-dtDraw * 4), goal = camGoal();
   snapCam = false;
   cam.x += (goal.eye[0] - cam.x) * k; cam.y += (goal.eye[1] - cam.y) * k; cam.z += (goal.eye[2] - cam.z) * k;
   const r = mode === 'rocket', earth = scene === 'earth', h = mode === 'heli';
@@ -2850,9 +2703,6 @@ function draw() {
   const near = nearPlane();
   const asp = cv.width / cv.height, vp = mul(persp(1.0, asp, near, far), view);
 
-  // high above the town the shadows are too small to see, so the graphics card gets a rest
-  const shadows = quality.shadows && earth && !(r && rocket.y > 40), dx = Math.sin(v.a), fz = Math.cos(v.a);
-  const lvp = shadows ? shadowPass([v.x + dx * 35, 0, v.z + fz * 35]) : ID;
   gl.viewport(0, 0, cv.width, cv.height);
   gl.depthMask(true); gl.clearColor(haze[0], haze[1], haze[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -2865,11 +2715,9 @@ function draw() {
   gl.enable(gl.DEPTH_TEST);
 
   use(MAIN);
-  gl.uniformMatrix4fv(prog.uVP, false, vp); gl.uniformMatrix4fv(prog.uLVP, false, lvp);
+  gl.uniformMatrix4fv(prog.uVP, false, vp);
   gl.uniform3f(prog.uCam, cam.x, cam.y, cam.z); gl.uniform3fv(prog.uSun, SUN); gl.uniform3fv(prog.uHaze, haze);
   gl.uniform2f(prog.uFog, fog[0], fog[1]); gl.uniform1f(prog.uTime, T);
-  gl.uniform1f(prog.uShadowOn, shadows ? 1 : 0); gl.uniform1f(prog.uTexel, 1 / SM);
-  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, shadowTex); gl.uniform1i(prog.uShadow, 0);
   gl.enable(gl.CULL_FACE);
   if (scene === 'space') drawSpaceThings();
   else if (scene === 'moon') drawMoonThings();
@@ -2880,7 +2728,6 @@ function draw() {
     solidThings();
     if (worldAlpha > 0) draw3(clouds, ID, WHITE, worldAlpha);
     gl.disable(gl.BLEND); worldAlpha = 1;
-    if (!shadows) drawBlobShadows();
   }
   for (const c of confetti) dbox(c.x, c.y, c.z, .45, .45, .45, c.life * 5, c.col);
 
