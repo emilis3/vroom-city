@@ -837,6 +837,7 @@ test('each set of five stars climbs the chime up to the fanfare, and the horn ne
 });
 
 test('M mutes everything through the master volume and shows the muted speaker; a reload starts with sound', async ({ page }) => {
+  test.setTimeout(150_000); // loads the game twice
   const problems = await open(page);
   const icon = page.locator('#muted');
   await expect(icon).toBeHidden();
