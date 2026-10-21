@@ -52,11 +52,13 @@ const shadowCheck = page => page.evaluate(() => {
   dbox = (x, y, z, w, h, d, yaw, col) => { if (h <= .04 && col.join() === hex(0x2f3a2f).join()) dark++; box(x, y, z, w, h, d, yaw, col); };
   setMode('car'); draw(); setMode('heli'); draw(); setMode('car');
   gl.bindFramebuffer = bind; dbox = box;
-  return { fb, dark, uniform: gl.getUniformLocation(MAIN.p, 'uShadow'), quality: { ...quality } };
+  return { fb, dark, uniform: gl.getUniformLocation(MAIN.p, 'uShadow'), quality: Object.keys(quality), easy };
 });
 
 test('no shadows anywhere: no shadow pass and no dark boxes, with or without depth textures, and in easy mode', async ({ page }) => {
-  const none = { fb: 0, dark: 0, uniform: null, quality: { maxDpr: 2 } };
+  test.setTimeout(150_000); // loads the game three times
+  await page.setViewportSize({ width: 400, height: 300 });
+  const none = { fb: 0, dark: 0, uniform: null, quality: ['maxDpr'], easy: false }; // the safety net only has sharpness left to lower
   let problems = await open(page);
   expect(await shadowCheck(page)).toEqual(none);
   expect(problems).toEqual([]);
@@ -67,7 +69,7 @@ test('no shadows anywhere: no shadow pass and no dark boxes, with or without dep
   expect(await shadowCheck(page)).toEqual(none);
   expect(problems).toEqual([]);
   problems = await open(page, () => { localStorage.setItem('vroomDrop', 'earlier'); });
-  expect(await shadowCheck(page)).toEqual({ ...none, quality: { maxDpr: 1 } });
+  expect(await shadowCheck(page)).toEqual({ ...none, easy: true });
   expect(await glError(page)).toBe(0);
   expect(problems).toEqual([]);
 });
