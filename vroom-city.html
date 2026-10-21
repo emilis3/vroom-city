@@ -968,7 +968,8 @@ function moonGroundStar() {
     return { x, y: 2.2, z, ramp: -1, phase: mrnd() * 6 };
   }
 }
-const moonRampStar = i => ({ ...rampPoint(moonRamps[i], RAMP_L / 2 + RAMP_STAR), y: 12, ramp: i, phase: mrnd() * 6 });
+// a caught ramp star waits (hidden) until the buggy has driven clear, so flying through it counts once
+const moonRampStar = (i, wait = false) => ({ ...rampPoint(moonRamps[i], RAMP_L / 2 + RAMP_STAR), y: 12, ramp: i, phase: mrnd() * 6, wait });
 for (let i = 0; i < 8; i++) moonStars.push(moonGroundStar());
 moonRamps.forEach((_, i) => moonStars.push(moonRampStar(i)));
 const tracks = []; // wheel marks in the moon dust: { x, z, a }
@@ -1328,7 +1329,8 @@ function driveBuggy(dt) {
   const rampWall = moonRamps.some(r => {
     const n = rampLocal(r, nx, nz), o = rampLocal(r, buggy.x, buggy.z), m = .6;
     const inside = l => Math.abs(l.u) < RAMP_L / 2 + m && Math.abs(l.v) < RAMP_W / 2 + m;
-    return inside(n) && !inside(o) && buggy.y < 1 && !(o.u <= -RAMP_L / 2 - m && Math.abs(n.v) < RAMP_W / 2);
+    const top = RAMP_H * (Math.min(RAMP_L / 2, Math.max(-RAMP_L / 2, n.u)) + RAMP_L / 2) / RAMP_L; // the ramp surface it would meet
+    return inside(n) && !inside(o) && buggy.y < top + .2 && !(o.u <= -RAMP_L / 2 - m && Math.abs(n.v) < RAMP_W / 2);
   });
   if (rampWall || Math.hypot(nx, nz) > MOONR - 4 || Math.hypot(nx - rocket.x, nz - rocket.z) < 3.4) { // ramp wall, edge of the surface, or the rocket
     if (Math.abs(buggy.v) > 3) softBoing();
@@ -1702,10 +1704,11 @@ function update(dt) {
     }
   }
   for (let i = 0; i < moonStars.length && scene === 'moon' && mode === 'buggy'; i++) {
-    const s = moonStars[i], sy = s.y + Math.sin(T * 3 + s.phase) * .5;
-    if (Math.hypot(s.x - buggy.x, s.z - buggy.z) < 3.5 && Math.abs(sy - (buggy.y + 1.5)) < 4.5) {
+    const s = moonStars[i], sy = s.y + Math.sin(T * 3 + s.phase) * .5, near = Math.hypot(s.x - buggy.x, s.z - buggy.z);
+    if (s.wait) { if (near > 20) s.wait = false; continue; }
+    if (near < 3.5 && Math.abs(sy - (buggy.y + 1.5)) < 4.5) {
       cheer(s.x, sy, s.z);
-      moonStars[i] = s.ramp < 0 ? moonGroundStar() : moonRampStar(s.ramp);
+      moonStars[i] = s.ramp < 0 ? moonGroundStar() : moonRampStar(s.ramp, true);
     }
   }
   if (scene !== 'earth' && (musicT -= dt) <= 0) { // gentle twinkly music in space and on the Moon
@@ -2245,7 +2248,7 @@ function drawSpaceThings() {
 function drawMoonThings() {
   draw3(moonWorld, ID);
   draw3(earthMesh, globeAt(-320, 260, -760, 80, T * .02)); // the Earth hangs in the black sky
-  for (const s of moonStars) {
+  for (const s of moonStars) if (!s.wait) {
     const y = s.y + Math.sin(T * 3 + s.phase) * .5, sz = s.ramp < 0 ? 2.6 : 3.6;
     draw3(starMesh, chain(mT(s.x, y, s.z), mRY(T * 2 + s.phase), mS(sz, sz, sz)));
   }
@@ -2348,7 +2351,7 @@ function draw() {
     const y = s.y + Math.sin(T * 3 + s.phase) * .5, g = (s.sky ? 6.5 : 4.8) * (1 + .06 * Math.sin(T * 5 + s.phase));
     draw3(glowBall, chain(mT(s.x, y, s.z), mS(g, g, g)), [1, .8, .25], .4);
   }
-  if (scene === 'moon') for (const s of moonStars) {
+  if (scene === 'moon') for (const s of moonStars) if (!s.wait) {
     const g = (s.ramp < 0 ? 4.8 : 6.5) * (1 + .06 * Math.sin(T * 5 + s.phase));
     draw3(glowBall, chain(mT(s.x, s.y + Math.sin(T * 3 + s.phase) * .5, s.z), mS(g, g, g)), [1, .8, .25], .4);
   }

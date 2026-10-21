@@ -430,6 +430,7 @@ test('the moon buggy bounces over crater rims, leaves tracks, and H flies home t
 // ---------- Moon stars and jump ramps (#16) ----------
 
 test('moon: 3 striped ramps and 8 + 3 stars, laid out the same every time and clear of craters, rocket and edge', async ({ page }) => {
+  test.setTimeout(150_000); // loads the game twice
   await open(page);
   const layout = () => page.evaluate(() => ({ ramps: moonRamps, stars: moonStars }));
   const r = await layout();
@@ -470,14 +471,15 @@ test('moon: the buggy catches ground stars and ramp stars, and each comes back',
     out.ground = [score - before, moonStars[ground] !== old, moonStars.filter(s => s.ramp < 0).length];
     const ri = moonStars.findIndex(s => s.ramp === 1), oldR = moonStars[ri], b2 = score;
     Object.assign(buggy, { x: oldR.x, z: oldR.z, y: oldR.y - 1.5, vy: 0, v: 0 }); step(1 / 60);
-    out.ramp = [score - b2, moonStars[ri].ramp, moonStars[ri].x === oldR.x && moonStars[ri].z === oldR.z];
+    step(.5); // still right there: the caught star waits, so no more points
+    out.ramp = [score - b2, moonStars[ri].ramp, moonStars[ri].x === oldR.x && moonStars[ri].z === oldR.z, moonStars[ri].wait];
     const far = moonStars.findIndex(s => s.ramp < 0), b3 = score; // the rocket can't catch them, and a buggy far below can't either
     Object.assign(buggy, { x: moonStars[far].x, z: moonStars[far].z, y: 8, vy: 0, v: 0, g: 0 }); step(1 / 60);
     out.high = score - b3;
     return out;
   }, STEP);
   expect(r.ground).toEqual([1, true, 8]);
-  expect(r.ramp).toEqual([1, 1, true]);
+  expect(r.ramp).toEqual([1, 1, true, true]);
   expect(r.high).toBe(0);
 });
 
@@ -490,22 +492,23 @@ test('moon: a fast run up a ramp reaches its star and lands with dust, a slow ru
       const ramp = moonRamps[0], st = rampPoint(ramp, -RAMP_L / 2 - 14), star = moonStars.find(q => q.ramp === 0);
       Object.assign(buggy, { x: st.x, z: st.z, a: ramp.a, v: speed, vy: 0, up: 0, peak: 0 });
       buggy.g = buggy.y = moonGround(st.x, st.z); keys.clear(); fx.length = 0;
-      let top = 0, dust = 0, caught = false;
+      let top = 0, dust = 0, caught = 0, now = star;
       for (let i = 0; i < 60 * 9; i++) {
         if (buggy.y < buggy.g + .05) buggy.v = speed; // hold the speed while on the ground
         update(1 / 60); top = Math.max(top, buggy.y); dust = Math.max(dust, fx.filter(f => f.dust).length);
-        if (moonStars.find(q => q.ramp === 0) !== star) caught = true;
+        const q = moonStars.find(k => k.ramp === 0); if (q !== now) { caught++; now = q; }
       }
-      return { top, dust, caught };
+      return { top, dust, caught, waiting: now.wait };
     };
     const rim = Math.max(...craters.map(c => moonGround(c.x + c.r, c.z)));
     return { fast: run(14), slow: run(3), rim, ramp: RAMP_H };
   }, STEP);
-  expect(r.fast.caught).toBe(true);
+  expect(r.fast.caught).toBe(1); // flying through the star counts once, then it waits for the buggy to drive clear
+  expect(r.fast.waiting).toBe(false); // and it is back once the buggy has gone
   expect(r.fast.top).toBeGreaterThan(r.ramp + 2); // clearly above the ramp, far above a crater rim
   expect(r.fast.top).toBeGreaterThan(r.rim * 5);
   expect(r.fast.dust).toBeGreaterThanOrEqual(8); // the landing puff
-  expect(r.slow.caught).toBe(false);
+  expect(r.slow.caught).toBe(0);
   expect(r.slow.top).toBeLessThan(r.ramp + 1); // only up the slope, no flight
 });
 
