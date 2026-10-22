@@ -23,7 +23,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run lint
       - run: npm test
-      - name: Tests again outside Europe/Vilnius
+      - name: Tests again in another time zone
         run: npm test
         env:
           TZ: America/Los_Angeles

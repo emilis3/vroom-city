@@ -1,16 +1,20 @@
 # Vroom City
 
-A simple blocky 3D driving game for small kids. Drive a car around a little town, drive into the lake to sail an Italian speedboat, switch to a helicopter to fly over the mountains, blast off in a rocket to the Moon, and collect stars. No crashing, no game over.
+A simple blocky 3D driving game for small kids. Drive a car around a little town, sail a speedboat on the lake, fly a helicopter over the mountains, blast off in a rocket to the Moon, fly a private jet to a little Tuscan town, and collect stars.
 
-It's a single HTML file using plain WebGL — no build step, no dependencies, works offline.
+### [▶ Play now](https://vroom-city.vercel.app)
 
-## Play
+| | |
+| --- | --- |
+| ![Driving the car through town](docs/screenshots/town.png) | ![Sailing the speedboat on the lake](docs/screenshots/boat.png) |
+| ![Flying the helicopter past the mountains](docs/screenshots/helicopter.png) | ![The Moon buggy next to the rocket](docs/screenshots/moon.png) |
 
-```
-./play.sh
-```
+## What it is
 
-or open `vroom-city.html` in Chrome.
+- Made for small kids: bright colours, happy sounds and simple controls.
+- No crashing and no game over. Just drive around and catch the stars.
+- A single HTML file using plain WebGL. No build step, no dependencies, and it works offline.
+- Plays in a desktop browser with a keyboard. Chrome works best.
 
 ## Controls
 
@@ -38,6 +42,22 @@ Climb for about 15 seconds to reach space. Going down towards the Earth brings t
 
 **Airport.** A small airfield with a private jet sits in the countryside past the town. Drive up next to the jet and press H to board it. Fly the jet out past the edge of the world to take a trip over the clouds to a little Tuscan town by a lake, and back again the same way.
 
+## Run it locally
+
+```
+./play.sh
+```
+
+or open `vroom-city.html` in Chrome.
+
 ## Checks (development only)
 
 The game needs nothing installed. For the checks, with Node 24: `npm ci`, `npx playwright install chromium`, then `npm run lint` and `npm test`.
+
+The screenshots above and the link preview image are captured from the game with `node scripts/screenshots.mjs`.
+
+## Credits and licence
+
+Made by [emilis3](https://github.com/emilis3).
+
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE): you're free to play it, share it, change it and reuse it for anything that isn't commercial.
