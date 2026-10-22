@@ -1,6 +1,7 @@
 // Browser checks for vroom-city.html, run in headless Chromium with software WebGL.
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const GAME = pathToFileURL(fileURLToPath(new URL('../vroom-city.html', import.meta.url))).href;
@@ -1638,5 +1639,43 @@ test('a drop-out in the Tuscan town names it', async ({ page }) => {
   const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
   await lose.evaluate(l => l.loseContext());
   await expect(page.locator('#start small')).toContainText('Graphics dropped out: car italy');
+  expect(problems).toEqual([]);
+});
+
+// ---------- Going public (#12) ----------
+const root = new URL('../', import.meta.url);
+const read = (f, enc = 'utf8') => readFileSync(new URL(f, root), enc);
+
+test('public repo: licence, link preview tags and image, no personal details in committed files', async () => {
+  expect(read('LICENSE').split('\n')[0]).toBe('Required Notice: Copyright emilis3 (https://github.com/emilis3)');
+  expect(read('LICENSE')).toContain('# PolyForm Noncommercial License 1.0.0');
+  const html = read('vroom-city.html'), meta = k => html.match(new RegExp(`<meta (?:name|property)="${k}" content="([^"]+)">`))?.[1];
+  expect(meta('description')).toBeTruthy();
+  expect([meta('og:title'), meta('og:url'), meta('twitter:card')]).toEqual(['Vroom City', 'https://vroom-city.vercel.app/', 'summary_large_image']);
+  const img = 'https://vroom-city.vercel.app/docs/screenshots/preview.png';
+  expect([meta('og:image'), meta('twitter:image')]).toEqual([img, img]);
+  const png = read('docs/screenshots/preview.png', null);
+  expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1200, 630]);
+  const files = execFileSync('git', ['ls-files'], { cwd: fileURLToPath(root), encoding: 'utf8' }).split('\n')
+    .filter(f => f && !/\.(png|jpg)$|package-lock\.json$/.test(f));
+  // the words are split so this file doesn't match itself
+  const personal = new RegExp(['vil' + 'nius', 'emi' + 'lisgin', 'gmail' + '\\.com', '\\bemi' + 'lis\\b'].join('|'), 'i');
+  const found = files.filter(f => personal.test(read(f)));
+  expect(found).toEqual([]);
+});
+
+test('served from the web, the page asks for the analytics script and plays on when it is blocked', async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 300 });
+  const site = 'https://vroom.test/', html = read('vroom-city.html'), asked = [], problems = [];
+  await page.route(site, r => r.fulfill({ contentType: 'text/html', body: html }));
+  await page.route('**/_vercel/insights/script.js', r => { asked.push(r.request().url()); r.abort(); });
+  page.on('pageerror', e => problems.push(`page error: ${e.message}`));
+  page.on('console', m => { if (m.type() === 'error' && !m.text().includes('Failed to load resource')) problems.push(`console error: ${m.text()}`); });
+  await page.goto(site);
+  await page.waitForFunction(() => T > 0.3);
+  expect(asked).toEqual(['https://vroom.test/_vercel/insights/script.js']);
+  expect(await page.evaluate(() => typeof window.va)).toBe('function');
+  await page.keyboard.press('KeyX');
+  await page.waitForFunction(() => started);
   expect(problems).toEqual([]);
 });

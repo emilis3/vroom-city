@@ -18,6 +18,9 @@ for (const f of readdirSync('tests').filter(f => f.endsWith('.mjs'))) {
   const cfg = [...config({ ...browser, ...node }, 'module'), { rules: { 'no-undef': 'off' } }];
   files.push({ name: `tests/${f}`, code: readFileSync(`tests/${f}`, 'utf8'), lineOffset: 0, cfg });
 }
+for (const f of readdirSync('scripts').filter(f => f.endsWith('.mjs'))) {
+  files.push({ name: `scripts/${f}`, code: readFileSync(`scripts/${f}`, 'utf8'), lineOffset: 0, cfg: [...config({ ...browser, ...node }, 'module'), { rules: { 'no-undef': 'off' } }] });
+}
 files.push({ name: 'playwright.config.mjs', code: readFileSync('playwright.config.mjs', 'utf8'), lineOffset: 0, cfg: config(node, 'module') });
 
 let problems = 0;
