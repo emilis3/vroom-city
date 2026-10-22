@@ -21,8 +21,7 @@ const glError = page => page.evaluate(() => gl.getError());
 
 test('loads, draws frames and needs nothing from the network', async ({ page }) => {
   const problems = await open(page);
-  expect(await page.evaluate(() => ({ shadows: quality.shadows, lost: gl.isContextLost() })))
-    .toEqual({ shadows: true, lost: false });
+  expect(await page.evaluate(() => gl.isContextLost())).toBe(false);
   expect(await glError(page)).toBe(0);
   // the picture isn't blank: sky at the top, darker road and buildings lower down
   const shot = await page.locator('canvas').screenshot();
@@ -33,34 +32,49 @@ test('loads, draws frames and needs nothing from the network', async ({ page }) 
 test('town, collisions and stars are exactly where they were before', async ({ page }) => {
   await open(page);
   const now = await page.evaluate(() => ({ stars, solids: solids.slice(0, station.firstSolid), mountains: mountains.map(m => ({ x: m.x, z: m.z, r: m.r, h: m.h })), lake }));
-  // only the few countryside trees where the launch station and the construction site now stand are gone
+  // only the few countryside trees where the launch station, the construction site and the airport now stand are gone
   const kept = await page.evaluate(all => all.filter(s => {
     const x = (s.x0 + s.x1) / 2, z = (s.z0 + s.z1) / 2;
-    return !inStationArea(x, z, 3) && !inSiteArea(x, z, 3);
+    return !inStationArea(x, z, 3) && !inSiteArea(x, z, 3) && !inAirportArea(x, z, 3);
   }), LAYOUT.solids);
-  expect(LAYOUT.solids.length - kept.length).toBeLessThan(30);
+  expect(LAYOUT.solids.length - kept.length).toBeLessThan(90);
   expect(now.solids).toEqual(kept);
   expect(now.mountains).toEqual(LAYOUT.mountains);
   expect(now.lake).toEqual(LAYOUT.lake);
   expect(now.stars).toEqual(LAYOUT.stars);
 });
 
-test('without depth-texture support it runs without real shadows', async ({ page }) => {
-  const problems = await open(page, () => {
+// ---------- No shadows (#22) ----------
+// counts the frame's off-screen passes (a shadow map would need one) and the flat dark boxes the old blob shadows drew
+const shadowCheck = page => page.evaluate(() => {
+  let fb = 0, dark = 0; const bind = gl.bindFramebuffer.bind(gl), box = dbox;
+  gl.bindFramebuffer = (t, f) => { if (f) fb++; bind(t, f); };
+  dbox = (x, y, z, w, h, d, yaw, col) => { if (h <= .04 && col.join() === hex(0x2f3a2f).join()) dark++; box(x, y, z, w, h, d, yaw, col); };
+  setMode('car'); draw(); setMode('heli'); draw(); setMode('car');
+  gl.bindFramebuffer = bind; dbox = box;
+  return { fb, dark, uniform: gl.getUniformLocation(MAIN.p, 'uShadow'), quality: Object.keys(quality), easy };
+});
+
+test('no shadows anywhere: no shadow pass and no dark boxes, with or without depth textures, and in easy mode', async ({ page }) => {
+  test.setTimeout(150_000); // loads the game three times
+  await page.setViewportSize({ width: 400, height: 300 });
+  const none = { fb: 0, dark: 0, uniform: null, quality: ['maxDpr'], easy: false }; // the safety net only has sharpness left to lower
+  let problems = await open(page);
+  expect(await shadowCheck(page)).toEqual(none);
+  expect(problems).toEqual([]);
+  problems = await open(page, () => {
     const get = WebGLRenderingContext.prototype.getExtension;
     WebGLRenderingContext.prototype.getExtension = function (name) { return name === 'WEBGL_depth_texture' ? null : get.call(this, name); };
   });
-  expect(await page.evaluate(() => quality.shadows)).toBe(false);
-  await page.keyboard.press('KeyX');
-  await page.keyboard.down('ArrowUp');
-  await page.waitForTimeout(500);
-  await page.keyboard.press('KeyH');
-  await page.waitForTimeout(500);
+  expect(await shadowCheck(page)).toEqual(none);
+  expect(problems).toEqual([]);
+  problems = await open(page, () => { localStorage.setItem('vroomDrop', 'earlier'); });
+  expect(await shadowCheck(page)).toEqual({ ...none, easy: true });
   expect(await glError(page)).toBe(0);
   expect(problems).toEqual([]);
 });
 
-test('safety net: choppy frames turn shadows off and lower sharpness, once and silently', async ({ page }) => {
+test('safety net: choppy frames lower sharpness, once and silently', async ({ page }) => {
   // pretend every frame takes 200 ms (a small window keeps the software renderer quick)
   await page.setViewportSize({ width: 400, height: 300 });
   const problems = await open(page, () => {
@@ -70,9 +84,9 @@ test('safety net: choppy frames turn shadows off and lower sharpness, once and s
   });
   await page.evaluate(() => { window.devicePixelRatio = 2; resize(); });
   expect(await page.evaluate(() => cv.width)).toBe(800);
-  await page.waitForFunction(() => !quality.shadows, null, { timeout: 30_000, polling: 250 });
+  await page.waitForFunction(() => quality.maxDpr === 1, null, { timeout: 30_000, polling: 250 });
   expect(await page.evaluate(() => ({ q: quality, w: cv.width, msgs: document.body.innerText.includes('slow') })))
-    .toEqual({ q: { shadows: false, maxDpr: 1 }, w: 400, msgs: false });
+    .toEqual({ q: { maxDpr: 1 }, w: 400, msgs: false });
   expect(await glError(page)).toBe(0);
   expect(problems).toEqual([]);
 });
@@ -715,8 +729,8 @@ test('if the graphics card gives up mid-game, a kind message shows and a key pre
   await Promise.all([page.waitForEvent('load'), page.keyboard.press('KeyX')]);
   await page.waitForFunction(() => T > 0.3);
   // after a drop the game starts in its lighter mode
-  expect(await page.evaluate(() => ({ lost: gl.isContextLost(), shadows: quality.shadows, dpr: quality.maxDpr })))
-    .toEqual({ lost: false, shadows: false, dpr: 1 });
+  expect(await page.evaluate(() => ({ lost: gl.isContextLost(), dpr: quality.maxDpr })))
+    .toEqual({ lost: false, dpr: 1 });
 });
 
 test('drop-out note: easy mode, which drop-out, and seconds after liftoff only in a flying rocket', async ({ page }) => {
@@ -773,19 +787,6 @@ test('when the browser has paused 3D graphics, the start screen says what to do'
   await page.goto(GAME);
   await expect(page.locator('#start')).toContainText('paused 3D graphics');
   expect(errors).toEqual(['WebGL is not available']);
-});
-
-test('high in the climb the shadow pass is skipped', async ({ page }) => {
-  await open(page);
-  await page.keyboard.press('KeyX');
-  await page.evaluate(() => { const [x, z] = station.world(0, -PADH + 5); Object.assign(car, { x, z }); switchVehicle(); rocket.count = 0; });
-  const fbBinds = y => page.evaluate(y => {
-    rocket.y = y; let n = 0; const o = gl.bindFramebuffer.bind(gl);
-    gl.bindFramebuffer = (t, f) => { if (f) n++; o(t, f); };
-    draw(); gl.bindFramebuffer = o; return n;
-  }, y);
-  expect(await fbBinds(0)).toBe(1);
-  expect(await fbBinds(200)).toBe(0);
 });
 
 test('climbing, the near plane moves out so far-off streets keep a steady depth', async ({ page }) => {
@@ -902,7 +903,7 @@ test('construction site: out in the countryside, clear of water, mountains and t
   expect(r.fromTown).toBeLessThan(130);
 });
 
-test('dirt piles: dirt lands on a pile or starts one, twelve at most, the big pile never runs low and fills up again', async ({ page }) => {
+test('dirt piles: dirt lands on a pile or starts one, twenty at most, the big pile never runs low and fills up again', async ({ page }) => {
   await open(page);
   const r = await page.evaluate(() => {
     const out = {};
@@ -925,7 +926,7 @@ test('dirt piles: dirt lands on a pile or starts one, twelve at most, the big pi
     out.full = big.amount;
     return out;
   });
-  expect(r).toEqual({ joined: [1, 2], apart: 2, most: 12, kept: 1, inside: true, gone: 0, low: 5, refilled: 6, full: 40 });
+  expect(r).toEqual({ joined: [1, 2], apart: 2, most: 20, kept: 1, inside: true, gone: 0, low: 5, refilled: 6, full: 40 });
 });
 
 test('H climbs into the machine next to the car and back out; the badge and help line follow', async ({ page }) => {
@@ -945,7 +946,7 @@ test('H climbs into the machine next to the car and back out; the badge and help
       switchVehicle(); out[m.kind + 'In'] = [mode, badge(), help()];
       switchVehicle(); out[m.kind + 'Out'] = [mode, hits(car.x, car.z), Math.hypot(car.x - m.x, car.z - m.z) < 14, inYard(car.x, car.z)];
     }
-    const [gx, gz] = site.world(0, -30); setMode('car'); Object.assign(car, { x: gx, z: gz }); refreshHud(); out.gate = badge();
+    const [gx, gz] = site.world(0, -YD - 5); setMode('car'); Object.assign(car, { x: gx, z: gz }); refreshHud(); out.gate = badge();
     setMode('heli'); Object.assign(heli, { x: digger.x, y: 20, z: digger.z }); switchVehicle(); out.heliLands = [mode, hits(car.x, car.z)];
     return out;
   });
@@ -970,7 +971,8 @@ test('digger: scoops from the big pile, fills the truck, spills on the ground; a
     Object.assign(digger, { a: site.a, load: 0, act: null }); truck.load = 0;
     machineAction(digger); step(.5); out.pose = diggerPose(digger).join() !== [.9, -2, -.9].join(); // the arm moves
     step(1.7); out.scoop = [digger.load, big.amount];
-    digger.a = site.a + Math.PI / 2; // towards the truck waiting at the loading spot
+    [truck.x, truck.z] = reachPoint({ x: digger.x, z: digger.z, a: site.a + Math.PI / 2 }); // the truck parked beside the digger
+    digger.a = site.a + Math.PI / 2; // towards the truck
     machineAction(digger); step(2); out.loaded = [digger.load, truck.load];
     digger.a = site.a + Math.PI; digger.load = 1; const n = piles.length; // towards the gate, nothing there
     machineAction(digger); step(2); out.ground = [digger.load, piles.length - n, loose()];
@@ -1030,7 +1032,8 @@ test('crane: swings, picks up a block, stacks blocks, never onto a machine, a fu
     const step = eval(STEP), out = {};
     setMode('car'); Object.assign(car, { x: crane.x, z: crane.z - 9 }); boardMachine(crane);
     const aim = (x, z) => { crane.a = Math.atan2(x - crane.x, z - crane.z); crane.reach = Math.hypot(x - crane.x, z - crane.z); };
-    const b0 = blocks[0], b1 = blocks[1], [sx, sz] = STACK;
+    const b0 = blocks[0], b1 = blocks[1], [sx, sz] = site.world(38, 0); // a free spot in the crane's reach
+    [truck.x, truck.z] = site.world(30, 5); // the truck parked in reach too
     aim(b0.x, b0.z); machineAction(crane); step(1); out.lowering = crane.hy < HOOKUP;
     step(2); out.held = [crane.held === b0, b0.held, Math.abs(b0.y - (crane.hy - 3.2)) < .01, crane.hy];
     aim(sx, sz); step(.1); out.carried = Math.hypot(b0.x - sx, b0.z - sz) < .1;
@@ -1062,85 +1065,99 @@ test('crane: swings, picks up a block, stacks blocks, never onto a machine, a fu
   });
 });
 
-test('machines on their own: the digger loads the truck, the truck tips, the dozer flattens it, the crane builds a tower', async ({ page }) => {
+test('left alone for a minute, nothing at the site moves but the big pile filling up', async ({ page }) => {
   await open(page);
   const r = await page.evaluate(STEP => {
     const step = eval(STEP), out = {};
-    const [gx, gz] = site.world(0, -40); setMode('car'); Object.assign(car, { x: gx, z: gz }); // the car stays out of the way
-    out.loaded = step(120, () => truck.phase === 'go');
-    out.leaves = step(60, () => truck.phase === 'back');
-    step(8); out.tipped = piles.some(p => !p.refill && p.amount >= 3);
-    out.flat = step(120, () => !piles.some(p => !p.refill)); // the dozer pushes every small pile flat and gone
-    out.big = piles.find(p => p.refill).amount;
-    out.tower = step(400, () => crane.dir === 'clear');
-    out.stacked = blocks.filter(b => b.y > 0).length;
-    out.dozerMoved = Math.hypot(dozer.x - dozer.home.x, dozer.z - dozer.home.z) > 1 || dozer.leg === 1;
-    out.inside = machines.every(m => inYard(m.x, m.z, 2));
-    return out;
-  }, STEP);
-  expect(r.loaded).toBeLessThan(120);
-  expect(r.leaves).toBeLessThan(60);
-  expect(r.tipped).toBe(true);
-  expect(r.flat).toBeLessThan(120);
-  expect(r.big).toBeGreaterThan(4);
-  expect(r.tower).toBeLessThan(400);
-  expect(r.stacked).toBeGreaterThanOrEqual(7);
-  expect(r.inside).toBe(true);
-});
-
-test('machines on their own stop for the car and wait; they stay inside the yard; going back to a job from anywhere', async ({ page }) => {
-  await open(page);
-  const r = await page.evaluate(STEP => {
-    const step = eval(STEP), out = {};
-    piles.splice(1); setMode('car');
-    // the truck is on its way to the tipping spot with the car parked in front of it
-    Object.assign(truck, { phase: 'go', load: 4, v: 0 });
-    const [px, pz] = site.world(-10, 3); Object.assign(truck, { x: px, z: pz, a: Math.atan2(TIPSPOT[0] - px, TIPSPOT[1] - pz) });
-    Object.assign(car, { x: px + Math.sin(truck.a) * 8, z: pz + Math.cos(truck.a) * 8, v: 0 });
-    step(6); out.waits = [Math.hypot(truck.x - car.x, truck.z - car.z) > 4, truck.blocked > 0, Math.abs(truck.v) < 1];
-    Object.assign(car, { x: site.world(0, -40)[0], z: site.world(0, -40)[1] });
-    step(12); out.goes = Math.hypot(truck.x - px, truck.z - pz) > 8 || truck.phase === 'back';
-    // a digger left far off with a full bucket drives back towards its spot, and goes to work as soon as the big pile is in reach
-    Object.assign(digger, { x: site.world(10, 20)[0], z: site.world(10, 20)[1], load: 1, act: null });
-    const far = Math.hypot(digger.x - digger.home.x, digger.z - digger.home.z);
-    out.home = step(60, () => digger.act) < 60 && Math.hypot(digger.x - digger.home.x, digger.z - digger.home.z) < far - 10;
-    // driving a machine into the fence stops at the fence
-    boardMachine(crane); leaveMachine(); boardMachine(dozer);
-    Object.assign(dozer, { x: site.world(0, 0)[0], z: site.world(0, 0)[1], a: site.a + Math.PI / 2, v: 0 });
-    keys.add('ArrowUp'); step(12); keys.clear();
+    const snap = () => JSON.stringify({
+      machines: machines.map(m => [m.x, m.z, m.a, m.v, m.load, m.act, m.reach, m.hy, m.blade, m.bladeT, m.held && blocks.indexOf(m.held)]),
+      piles: piles.map(p => [p.x, p.z, p.refill ? 'big' : p.amount, p.spread]), blocks: blocks.map(b => [b.x, b.y, b.z, b.held]),
+    });
+    const [gx, gz] = site.world(0, -YD - 5); setMode('car'); Object.assign(car, { x: gx, z: gz, v: 0 }); // parked outside the gate
+    const big = piles.find(p => p.refill); big.amount = 30;
+    const before = snap(); step(60); out.still = snap() === before; out.refilled = big.amount > 30;
+    // left in the middle of a scoop: the scoop finishes, then the digger stays still
+    setMode('car'); Object.assign(car, { x: digger.x, z: digger.z }); boardMachine(digger); machineAction(digger); step(.3); leaveMachine();
+    step(3); out.scooped = [digger.act, digger.load];
+    const d0 = [digger.x, digger.z, digger.a].join(); step(5); out.digger = [digger.x, digger.z, digger.a].join() === d0;
+    // left while driving: the truck stops where it is
+    setMode('car'); Object.assign(car, { x: truck.x, z: truck.z }); boardMachine(truck);
+    keys.add('ArrowUp'); step(1); keys.clear(); const t0 = [truck.x, truck.z]; leaveMachine();
+    step(5); out.truck = [truck.v, Math.hypot(truck.x - t0[0], truck.z - t0[1])];
+    // the bulldozer parked with its blade down on a pile leaves the pile alone
+    setMode('car'); Object.assign(car, { x: dozer.x, z: dozer.z }); boardMachine(dozer); machineAction(dozer); leaveMachine();
+    const p = piles.find(q => !q.refill); [p.x, p.z] = [dozer.x + Math.sin(dozer.a) * 5, dozer.z + Math.cos(dozer.a) * 5];
+    const p0 = [p.x, p.z, p.spread, p.amount].join(); step(5); out.blade = [dozer.blade > .6, [p.x, p.z, p.spread, p.amount].join() === p0];
+    // a driven machine stops at the fence
+    boardMachine(dozer); Object.assign(dozer, { x: site.world(0, 0)[0], z: site.world(0, 0)[1], a: site.a + Math.PI / 2, v: 0, bladeT: 0 });
+    keys.add('ArrowUp'); step(16); keys.clear();
     out.fence = [inYard(dozer.x, dozer.z, 3), inYard(dozer.x, dozer.z, 6) === false];
-    return out;
-  }, STEP);
-  expect(r).toMatchObject({ waits: [true, true, true], goes: true, home: true, fence: [true, true] });
-});
-
-test('a crane on its own waits while the car is under the hook; the digger goes round the truck after a pushed-away big pile; no climbing in through the fence', async ({ page }) => {
-  await open(page);
-  const r = await page.evaluate(STEP => {
-    const step = eval(STEP), out = {};
-    const [gx, gz] = site.world(0, -40); setMode('car'); Object.assign(car, { x: gx, z: gz });
-    // the crane carries a block to the tower spot, but the car is parked there
-    machines.splice(0, machines.length, crane);
-    const [sx, sz] = STACK, b = blocks[0];
-    Object.assign(car, { x: sx, z: sz, v: 0 });
-    Object.assign(b, { held: true }); crane.held = b; crane.dir = 'build'; crane.act = null;
-    step(8); out.waits = [crane.held === b, b.held];
-    Object.assign(car, { x: gx, z: gz }); step(8); out.puts = [crane.held, b.held];
-    // the big pile pushed far from the digger's spot: the digger drives over and starts scooping
-    machines.push(digger, truck); piles.splice(1);
-    const big = piles[0], [bx, bz] = site.world(15, -15); Object.assign(big, { x: bx, z: bz });
-    Object.assign(digger, { x: digger.home.x, z: digger.home.z, load: 0, act: null });
-    const far = Math.hypot(digger.x - bx, digger.z - bz);
-    out.follows = step(60, () => digger.act) < 60 && Math.hypot(digger.x - bx, digger.z - bz) < far - 10;
     // a machine just inside the fence, the car just outside it: no climbing in through the fence
-    machines.push(dozer); Object.assign(dozer, { x: site.world(0, YD - 3)[0], z: site.world(0, YD - 3)[1] });
+    leaveMachine(); Object.assign(dozer, { x: site.world(0, YD - 3)[0], z: site.world(0, YD - 3)[1] });
     Object.assign(car, { x: site.world(0, YD + 2.5)[0], z: site.world(0, YD + 2.5)[1] });
     out.outside = nearMachine();
     Object.assign(car, { x: site.world(0, YD - 7.5)[0], z: site.world(0, YD - 7.5)[1] });
     out.inside = nearMachine() === dozer;
+    out.hum = typeof siteGain;
     return out;
   }, STEP);
-  expect(r).toEqual({ waits: [true, true], puts: [null, false], follows: true, outside: null, inside: true });
+  expect(r).toEqual({ still: true, refilled: true, scooped: [null, 1], digger: true, truck: [0, 0], blade: [true, true],
+    fence: [true, true], outside: null, inside: true, hum: 'undefined' });
+});
+
+test('a yard three times as big, six big piles spread out, and the machines well apart', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z), out = {};
+    out.yard = [2 * YW, 2 * YD];
+    out.piles = piles.map(p => [p.refill, p.amount]);
+    out.pileGap = Math.min(...piles.flatMap((p, i) => piles.filter((_, j) => j > i).map(q => d(p, q))));
+    out.machineGap = Math.min(...machines.flatMap((m, i) => machines.filter((_, j) => j > i).map(o => d(m, o))));
+    out.inside = [...piles, ...machines, ...blocks].every(o => inYard(o.x, o.z, 3));
+    out.clear = piles.every(p => machines.every(m => d(p, m) > pileR(p) + m.r) && blocks.every(b => d(p, b) > pileR(p) + 1));
+    out.digger = d(digger, piles.find(p => p.refill)) < 12; out.crane = blocks.every(b => { const r = d(crane, b); return r > 5 && r < 24; });
+    // the bulldozer shoves a big pile along a long way without it vanishing
+    const p = piles.find(q => !q.refill && d(q, dozer) < 15);
+    setMode('car'); Object.assign(car, { x: dozer.x, z: dozer.z }); boardMachine(dozer);
+    dozer.a = Math.atan2(p.x - dozer.x, p.z - dozer.z); machineAction(dozer);
+    const p0 = { x: p.x, z: p.z }; keys.add('ArrowUp'); step(4); keys.clear();
+    out.pushed = [piles.includes(p), d(p, p0) > 5, p.amount];
+    return out;
+  }, STEP);
+  expect(r.yard).toEqual([120, 90]);
+  expect(r.piles).toEqual([[true, 40], [false, 25], [false, 25], [false, 25], [false, 25], [false, 25]]);
+  expect(r.pileGap).toBeGreaterThan(15);
+  expect(r.machineGap).toBeGreaterThan(25);
+  expect(r).toMatchObject({ inside: true, clear: true, digger: true, crane: true, pushed: [true, true, 25] });
+});
+
+test('crane: a bright X straight under the hook, on the ground, a pile or a stack, green over a block to grab', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    const aim = (x, z) => { crane.a = Math.atan2(x - crane.x, z - crane.z); crane.reach = Math.hypot(x - crane.x, z - crane.z); };
+    const drawn = () => { // the X's colours drawn in one frame
+      const seen = new Set(), box = dbox;
+      dbox = (...a) => { for (const [k, c] of Object.entries({ white: AIMW, orange: AIMO, green: AIMG })) if (a[7] === c) seen.add(k); box(...a); };
+      draw(); dbox = box; return [...seen].sort().join();
+    };
+    setMode('car'); Object.assign(car, { x: crane.x, z: crane.z - 9 }); out.car = drawn();
+    boardMachine(crane);
+    const [gx, gz] = site.world(38, 0); aim(gx, gz); // bare ground
+    const a = craneAim(crane), [hx, hz] = hookAt(crane);
+    out.ground = [Math.hypot(a.x - hx, a.z - hz) < 1e-9, a.y, a.green, drawn()];
+    const b = blocks[0]; aim(b.x, b.z); out.block = [craneAim(crane).green, craneAim(crane).y, drawn()];
+    machineAction(crane); step(.5); out.busy = [craneAim(crane), drawn()]; step(2); // grabbed it
+    out.carrying = [crane.held === b, craneAim(crane).green];
+    const s = blocks[1]; aim(s.x, s.z); out.onStack = craneAim(crane).y; // would land on top of the other block
+    const p = piles.find(q => !q.refill && Math.hypot(q.x - crane.x, q.z - crane.z) < 24) || piles[1];
+    Object.assign(p, { x: crane.x + 12, z: crane.z }); aim(p.x, p.z); out.pile = craneAim(crane).y > 1;
+    return out;
+  }, STEP);
+  expect(r).toEqual({
+    car: '', ground: [true, 0, false, 'orange,white'], block: [true, 2, 'green'], busy: [null, ''],
+    carrying: [true, false], onStack: 2, pile: true,
+  });
 });
 
 test('machines catch no stars, and the drive-around still works with sound', async ({ page }) => {
@@ -1161,14 +1178,12 @@ test('machines catch no stars, and the drive-around still works with sound', asy
     out.loud = [siteVol(digger) > 0, siteVol(crane) > 0];
     Object.assign(car, { x: site.world(0, -90)[0], z: site.world(0, -90)[1] });
     out.far = machines.map(siteVol);
-    out.hum = siteGain instanceof GainNode;
     return out;
   }, STEP);
   expect(r.score).toBe(0);
   expect(r.beeps).toBeGreaterThan(0);
   expect(r.loud[0]).toBe(true);
   expect(r.far).toEqual([0, 0, 0, 0]);
-  expect(r.hum).toBe(true);
   expect(problems).toEqual([]);
 });
 
@@ -1384,5 +1399,244 @@ test('with the keyboard: each planet and its vehicle draw without errors, and a 
   const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
   await lose.evaluate(l => l.loseContext());
   await expect(page.locator('#start small')).toContainText('Graphics dropped out: rocket purple planet');
+  expect(problems).toEqual([]);
+});
+
+// ---------- Airport, private jet and the Tuscan town (#10) ----------
+
+test('airport: out in the countryside on a free side, with a paved road from a town road, and the jet parked on the apron', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const ap = airport, clash = [];
+    for (let lx = -AW; lx <= AW; lx += 4) for (let lz = -AD; lz <= AD; lz += 4) {
+      const [x, z] = ap.world(lx, lz);
+      if (wet(x, z, 2)) clash.push('water'); if (inStationArea(x, z)) clash.push('station'); if (inSiteArea(x, z)) clash.push('site');
+      if (mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4)) clash.push('mountain');
+      if (townDist(x, z) < 10) clash.push('town');
+    }
+    // the road starts on a town road and is paved all the way to the apron
+    const [rx, rz] = ap.world(0, -AD - AROAD);
+    const [jx, jz] = ap.world(...PARK);
+    return { clash: [...new Set(clash)], roadStart: townDist(rx, rz), jet: [jet.phase, jet.town, Math.hypot(jet.x - jx, jet.z - jz) < 1],
+      jetSolid: jetBlocks(jx, jz, 1), pad: [ap.hx !== undefined, inAirportArea(ap.hx, ap.hz)] };
+  });
+  expect(r.clash).toEqual([]);
+  expect(r.roadStart).toBeLessThan(12);
+  expect(r.jet).toEqual(['parked', 'home', true]);
+  expect(r.jetSolid).toBe(true);
+  expect(r.pad).toEqual([true, true]);
+});
+
+test('jet: H next to it boards with a chime, W takes off, H in the air lands it by itself and the car gets out', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX');
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}, heard = [], real = dingDong, realSq = squeak;
+    dingDong = () => { heard.push('ding-dong'); real(); }; squeak = () => { heard.push('squeak'); realSq(); };
+    const badge = () => (refreshHud(), [document.getElementById('mode').textContent, Object.keys(HELP).find(k => HELP[k] === document.getElementById('help').textContent)]);
+    const ap = airport, [x, z] = ap.world(PARK[0] + 9, PARK[1]);
+    setMode('car'); Object.assign(car, { x, z, v: 0 }); refreshHud(); out.near = badge();
+    switchVehicle(); out.board = [mode, jet.phase, badge()];
+    switchVehicle(); out.outAgain = [mode, jet.phase]; switchVehicle();
+    keys.add('KeyW'); out.roll = step(30, () => jet.phase !== 'ground'); out.rolled = ap.local(jet.x, jet.z)[0] - RWY_START;
+    step(10, () => jet.phase === 'air'); keys.clear(); out.air = [jet.phase, badge()];
+    switchVehicle(); out.landing = [jet.phase, badge()];
+    switchVehicle(); keys.add('ArrowLeft'); keys.add('KeyW'); // H and steering do nothing while it lands itself
+    out.land = step(120, () => mode === 'car'); keys.clear();
+    out.after = [mode, jet.phase, Math.hypot(car.x - jet.x, car.z - jet.z) < 15];
+    dingDong = real; squeak = realSq; out.heard = heard;
+    return out;
+  }, STEP);
+  expect(r.near).toEqual(['H = ✈️', 'carJet']);
+  expect(r.board).toEqual(['jet', 'ground', ['H = 🚗', 'jetRunway']]);
+  expect(r.outAgain).toEqual(['car', 'parked']);
+  expect(r.rolled).toBeGreaterThan(70); expect(r.rolled).toBeLessThan(130);
+  expect(r.air).toEqual(['air', ['H = 🛬', 'jetAir']]);
+  expect(r.landing).toEqual(['land', ['✈️', 'jetAuto']]);
+  expect(r.land).toBeLessThan(120);
+  expect(r.after).toEqual(['car', 'parked', true]);
+  expect(r.heard).toEqual(['ding-dong', 'ding-dong', 'squeak']);
+  expect(problems).toEqual([]);
+});
+
+test('jet: lands itself on the runway from every side of town', async ({ page }) => {
+  test.setTimeout(150_000);
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP); started = true;
+    const ap = airport;
+    return [[0, 40, 0], [200, 50, 1.5], [-200, 30, 3], [0, 60, -1.6], [60, 20, Math.PI]].map(([dx, y, da]) => {
+      setMode('jet');
+      Object.assign(jet, { x: ap.x + dx, y, z: ap.z - 150 * ap.oz, a: ap.run + da, v: 35, vy: 0, phase: 'air', town: 'home' });
+      switchVehicle();
+      let td = null, low = Infinity;
+      const secs = step(150, () => {
+        if (jet.leg === 'final' && jet.y > 0) low = Math.min(low, jet.y - groundAt(jet.x, jet.z, 0));
+        if (jet.leg === 'roll' && !td) { const [lx, lz] = ap.local(jet.x, jet.z); td = [lx, lz - RWYZ]; }
+        return mode === 'car';
+      });
+      return { secs, onRunway: td !== null && Math.abs(td[0]) < RWY && Math.abs(td[1]) < 3, low: low > 0 };
+    });
+  }, STEP);
+  for (const c of r) expect(c).toEqual({ secs: expect.any(Number), onRunway: true, low: true });
+  for (const c of r) expect(c.secs).toBeLessThan(90);
+});
+
+test('jet: stays 15 to 65 m up, lifts itself over mountains, and leaves wing trails that fade', async ({ page }) => {
+  test.setTimeout(150_000);
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}; started = true;
+    setMode('jet');
+    // diving and climbing over town
+    Object.assign(jet, { x: W / 2, y: 40, z: W / 2, a: 0, v: 35, vy: 0, phase: 'air', town: 'home' });
+    keys.add('KeyS'); let low = Infinity; step(6, () => { low = Math.min(low, jet.y - groundAt(jet.x, jet.z, 0)); }); keys.clear();
+    keys.add('KeyW'); step(12); keys.clear(); out.high = jet.y;
+    out.low = low;
+    // straight at the tallest mountain, pushing down
+    const m = [...mountains].sort((a, b) => b.h - a.h)[0];
+    Object.assign(jet, { x: m.x, y: 20, z: m.z - m.r * 2 - 60, a: 0, v: 35, vy: 0, phase: 'air' });
+    keys.add('KeyS'); let clear = Infinity;
+    step(8, () => { clear = Math.min(clear, jet.y - groundAt(jet.x, jet.z, 0)); }); keys.clear();
+    out.overMountain = clear; out.speed = jet.v;
+    out.trails = fx.filter(f => f.trail).length;
+    setMode('car'); step(4); out.trailsLater = fx.filter(f => f.trail).length;
+    return out;
+  }, STEP);
+  expect(r.low).toBeGreaterThan(12);
+  expect(r.high).toBeLessThanOrEqual(65);
+  expect(r.overMountain).toBeGreaterThan(5);
+  expect(r.speed).toBeCloseTo(35, 0);
+  expect(r.trails).toBeGreaterThan(20);
+  expect(r.trailsLater).toBe(0);
+});
+
+test('trip: past the edge the jet flies over the clouds to the Tuscan town, and back home the same way', async ({ page }) => {
+  test.setTimeout(150_000);
+  const problems = await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}; started = true;
+    const fly = () => {
+      const t = here(); setMode('jet');
+      Object.assign(jet, { x: (t.x0 + t.x1) / 2, y: 40, z: t.z0 + 30, a: Math.PI, v: 35, vy: 0, phase: 'air', town });
+      step(10, () => scene === 'trip');
+      const during = [scene, jet.phase, document.getElementById('mode').textContent];
+      switchVehicle(); // does nothing on the trip
+      const secs = step(20, () => scene !== 'trip');
+      const ap = here().airport, arrived = [town, scene, jet.phase, Math.hypot(jet.x - ap.x, jet.z - ap.z) < 400];
+      switchVehicle(); step(120, () => mode === 'car');
+      return { during, secs, arrived, landed: [mode, jet.town, jet.phase] };
+    };
+    out.there = fly(); out.back = fly();
+    return out;
+  }, STEP);
+  expect(r.there.during).toEqual(['trip', 'trip', '✈️']);
+  expect(r.there.secs).toBeGreaterThan(5); expect(r.there.secs).toBeLessThan(7);
+  expect(r.there.arrived).toEqual(['italy', 'earth', 'arrive', true]);
+  expect(r.there.landed).toEqual(['car', 'italy', 'parked']);
+  expect(r.back.arrived).toEqual(['home', 'earth', 'arrive', true]);
+  expect(r.back.landed).toEqual(['car', 'home', 'parked']);
+  expect(await glError(page)).toBe(0);
+  expect(problems).toEqual([]);
+});
+
+test('Tuscan town: piazza, church, bell tower, a lake like home, a river with bridges, trees, an airfield and 26 stars, the same every time', async ({ page }) => {
+  test.setTimeout(150_000);
+  await open(page);
+  const once = () => page.evaluate(() => {
+    if (italy === null) buildItaly();
+    const it = italy, ap = it.airport;
+    return { lake: it.lake.area / lake.area, landmarks: Object.keys(it.landmarks), bridges: it.bridges.length, trees: it.trees,
+      hills: it.hills.length, mountains: it.mountains.length, airport: ap !== null && ap.hx !== undefined,
+      stars: [it.stars.filter(s => !s.sky && !s.water).length, it.stars.filter(s => s.sky).length, it.stars.filter(s => s.water).length],
+      riverInTown: it.river.some(p => p.x > IX && p.x < IX + WI && p.z > 0 && p.z < WI), layout: JSON.stringify([it.stars, it.bridges, ap.x, ap.z]),
+      noRocket: !inStationArea(ap.x, ap.z) };
+  });
+  const a = await once();
+  expect(Math.abs(a.lake - 1)).toBeLessThan(.15);
+  expect(a.landmarks).toEqual(['fountain', 'church', 'tower']);
+  expect(a.bridges).toBeGreaterThan(2);
+  expect(a.trees.cypress).toBeGreaterThan(50); expect(a.trees.poplar).toBeGreaterThan(5); expect(a.trees.olive).toBeGreaterThan(20);
+  expect(a.hills).toBeGreaterThan(5); expect(a.mountains).toBeGreaterThan(3);
+  expect(a.airport).toBe(true);
+  expect(a.stars).toEqual([10, 8, 8]);
+  expect(a.riverInTown).toBe(true);
+  await page.reload(); await page.waitForFunction(() => T > 0.3);
+  expect((await once()).layout).toBe(a.layout);
+});
+
+test('Tuscan town: the Italian car and its horn, bridges over the river, the boat under them, stars, the helicopter pad and the edge', async ({ page }) => {
+  test.setTimeout(150_000);
+  const problems = await open(page);
+  await page.keyboard.press('KeyX');
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}, notes = [], realTone = tone;
+    const horns = () => { notes.length = 0; tone = (f, ...a) => { notes.push(f); realTone(f, ...a); }; lastHorn = -9; horn(); tone = realTone; return [...new Set(notes)].sort(); };
+    out.homeHorn = horns();
+    goTo('italy'); out.italyHorn = horns();
+    const b = italy.bridges[2];
+    setMode('car'); Object.assign(car, { x: b.x - 30, z: b.z, a: Math.PI / 2, v: 0 });
+    keys.add('ArrowUp'); let top = 0; const modes = new Set();
+    step(10, () => { top = Math.max(top, car.y); modes.add(mode); return car.x > b.x + 30; }); keys.clear();
+    out.bridge = [top, [...modes]];
+    setMode('boat'); Object.assign(boat, { x: b.x, z: b.z - 25, a: 0, v: 0, hop: 0, vy: 0 });
+    keys.add('ArrowUp'); modes.clear(); step(10, () => { modes.add(mode); return boat.z > b.z + 20; }); keys.clear();
+    out.under = [[...modes], boat.z > b.z + 20];
+    const s = italy.stars.find(s => !s.sky && !s.water), before = score;
+    setMode('car'); Object.assign(car, { x: s.x, z: s.z, v: 0 }); step(.2); out.star = score - before;
+    out.pads = ['home', 'italy'].map(tn => { goTo(tn); const ap = here().airport; setMode('heli'); Object.assign(heli, { x: ap.hx, y: 5, z: ap.hz, v: 0 }); switchVehicle(); return [mode, Math.hypot(car.x - ap.hx, car.z - ap.hz) < 1]; });
+    goTo('italy');
+    setMode('heli'); Object.assign(heli, { x: italy.x1 - 5, y: 20, z: 100, a: Math.PI / 2, v: 0, lift: 0 }); keys.add('ArrowUp'); step(4); keys.clear();
+    setMode('car'); Object.assign(car, { x: IX + 100, z: italy.z0 + 10, a: Math.PI, v: 0 }); keys.add('ArrowUp'); step(4); keys.clear();
+    out.edge = [heli.x <= italy.x1, car.z >= italy.z0, town];
+    return out;
+  }, STEP);
+  expect(r.italyHorn).toEqual([587, 740]);
+  expect(r.homeHorn).not.toEqual(r.italyHorn);
+  expect(r.bridge[0]).toBeCloseTo(2.6, 1);
+  expect(r.bridge[1]).toEqual(['car']);
+  expect(r.under).toEqual([['boat'], true]);
+  expect(r.star).toBe(1);
+  expect(r.pads).toEqual([['car', true], ['car', true]]);
+  expect(r.edge).toEqual([true, true, 'italy']);
+  // the Italian car is drawn in Italy and the town draws without errors
+  await page.waitForFunction(() => T > 2);
+  expect(await glError(page)).toBe(0);
+  expect(problems).toEqual([]);
+});
+
+test('with the keyboard: board the jet, take off, fly to Italy, and everything draws without errors', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX');
+  await page.evaluate(() => { const [x, z] = airport.world(PARK[0] + 9, PARK[1]); Object.assign(car, { x, z, v: 0 }); });
+  await page.keyboard.press('KeyH');
+  await page.waitForFunction(() => mode === 'jet', null, { timeout: 10_000 });
+  await page.keyboard.down('KeyW');
+  await page.waitForFunction(() => jet.v > 5, null, { timeout: 40_000 });
+  await page.keyboard.up('KeyW');
+  // CI's software renderer is slow: skip the rest of the run-up and fly to just inside the edge
+  await page.evaluate(() => { const t = here(); Object.assign(jet, { x: W / 2, y: 40, z: t.z0 + 5, a: Math.PI, v: 35, phase: 'air' }); });
+  await page.waitForFunction(() => scene === 'trip', null, { timeout: 40_000 });
+  const shot = await page.locator('canvas').screenshot();
+  expect(shot.length).toBeGreaterThan(5_000);
+  await page.evaluate(() => { trip.t = TRIP_TIME - .05; });
+  await page.waitForFunction(() => town === 'italy' && scene === 'earth', null, { timeout: 60_000 });
+  await page.keyboard.press('KeyH');
+  await page.waitForFunction(() => jet.phase === 'land', null, { timeout: 10_000 });
+  expect(await glError(page)).toBe(0);
+  expect(problems).toEqual([]);
+});
+
+test('a drop-out in the Tuscan town names it', async ({ page }) => {
+  const problems = await open(page);
+  await page.keyboard.press('KeyX');
+  await page.evaluate(() => goTo('italy'));
+  const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
+  await lose.evaluate(l => l.loseContext());
+  await expect(page.locator('#start small')).toContainText('Graphics dropped out: car italy');
   expect(problems).toEqual([]);
 });

@@ -14,14 +14,14 @@ or open `vroom-city.html` in Chrome.
 
 ## Controls
 
-| Key | Car | Boat | Helicopter |
-| --- | --- | --- | --- |
-| Arrow keys | Drive | Steer | Fly forward/back, turn |
-| WASD | Drive | Steer | A/D turn, W up, S down |
-| Space | Horn | Toot toot | Go up |
-| Shift | — | — | Go down |
-| H or Enter | Switch to helicopter | Switch to helicopter | Land (as the boat over water, else the car) |
-| M | Sound on/off | Sound on/off | Sound on/off |
+| Key | Car | Boat | Helicopter | Jet |
+| --- | --- | --- | --- | --- |
+| Arrow keys | Drive | Steer | Fly forward/back, turn | ← → steer, ↑ take off / go up, ↓ go down |
+| WASD | Drive | Steer | A/D turn, W up, S down | A/D steer, W take off / go up, S go down |
+| Space | Horn | Toot toot | Go up | Take off / go up |
+| Shift | — | — | Go down | Go down |
+| H or Enter | Switch to helicopter (next to the jet: board the jet) | Switch to helicopter | Land (as the boat over water, else the car) | On the runway: back to the car. In the air: land by itself |
+| M | Sound on/off | Sound on/off | Sound on/off | Sound on/off |
 
 The car turns into the boat when it drives into the lake or the river, and back into the car on land.
 
@@ -35,6 +35,8 @@ The car turns into the boat when it drives into the lake or the river, and back 
 | H or Enter | On the launch pad: back to the car | — | Back into the rocket |
 
 Climb for about 15 seconds to reach space. Going down towards the Earth brings the rocket home to the launch pad; going down close to the Moon lands on it, and a buggy rolls out.
+
+**Airport.** A small airfield with a private jet sits in the countryside past the town. Drive up next to the jet and press H to board it. Fly the jet out past the edge of the world to take a trip over the clouds to a little Tuscan town by a lake, and back again the same way.
 
 ## Checks (development only)
 

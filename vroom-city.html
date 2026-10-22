@@ -27,7 +27,7 @@
 <div id="yay">Great job!</div>
 <div id="help"></div>
 <div id="muted" title="Sound is off: press M">🔇</div>
-<div id="start"><h1>🚗 Vroom City!</h1><p>Catch the stars! Press H to fly the helicopter 🚁</p><p>Drive into the lake to sail the speedboat 🚤</p><p>A rocket 🚀 is waiting at the edge of town</p><p>Press any key to start</p></div>
+<div id="start"><h1>🚗 Vroom City!</h1><p>Catch the stars! Press H to fly the helicopter 🚁</p><p>Drive into the lake to sail the speedboat 🚤</p><p>A rocket 🚀 is waiting at the edge of town</p><p>An airplane ✈️ is waiting at the airport</p><p>Press any key to start</p></div>
 <script>
 "use strict";
 // ---------- WebGL setup ----------
@@ -57,7 +57,7 @@ cv.addEventListener('webglcontextlost', e => {
   ac?.suspend();
   let n = 1;
   try { n = (parseInt(localStorage.getItem('vroomDrops'), 10) || 0) + 1; localStorage.setItem('vroomDrops', n); } catch { /* private mode */ }
-  const note = dropNote({ mode, scene: scene === 'planet' ? PLANET_NAMES[planetIx] + ' planet' : scene, height: rocket.y, w: cv.width, h: cv.height, fps: 1000 / Math.max(1, frameMs), easy, n,
+  const note = dropNote({ mode, scene: scene === 'planet' ? PLANET_NAMES[planetIx] + ' planet' : scene === 'earth' && town === 'italy' ? 'italy' : scene, height: rocket.y, w: cv.width, h: cv.height, fps: 1000 / Math.max(1, frameMs), easy, n,
     lift: rocket.lift === null ? null : T - rocket.lift, gpu: gpuName, time: new Date().toISOString().slice(0, 16) });
   try { localStorage.setItem('vroomDrop', note); } catch { /* private mode */ }
   sorry('Oops, the graphics took a little break<br>Press any key to play again', note);
@@ -66,7 +66,7 @@ cv.addEventListener('webglcontextlost', e => {
 cv.addEventListener('webglcontextrestored', () => location.reload());
 const gpuInfo = gl.getExtension('WEBGL_debug_renderer_info');
 const gpuName = gpuInfo ? gl.getParameter(gpuInfo.UNMASKED_RENDERER_WEBGL) : 'unknown graphics';
-const quality = { shadows: false, maxDpr: 2 }; // the safety net lowers these on slow computers
+const quality = { maxDpr: 2 }; // the safety net lowers this on slow computers
 function resize() {
   const d = Math.min(devicePixelRatio || 1, quality.maxDpr);
   cv.width = Math.round(innerWidth * d); cv.height = Math.round(innerHeight * d);
@@ -75,32 +75,16 @@ addEventListener('resize', resize); resize();
 
 // Every vertex: position, normal, colour, material (0 lit, 1 water, 2 glow halo, 3 bright light)
 const VS = `attribute vec3 aPos, aNor; attribute vec4 aCol;
-uniform mat4 uVP, uM, uLVP; uniform mat3 uNM;
-varying vec3 vN, vW; varying vec4 vC, vL;
+uniform mat4 uVP, uM; uniform mat3 uNM;
+varying vec3 vN, vW; varying vec4 vC;
 void main() {
   vec4 w = uM * vec4(aPos, 1.0); vW = w.xyz;
   vN = uNM * aNor; vC = aCol;
-  vL = uLVP * vec4(w.xyz + normalize(vN) * 0.15, 1.0); // nudged along the normal so faces don't shadow themselves
   gl_Position = uVP * w;
 }`;
 const FS = `precision highp float;
-varying vec3 vN, vW; varying vec4 vC, vL;
-uniform vec3 uTint, uCam, uSun, uHaze; uniform vec2 uFog; uniform float uAlpha, uTime, uShadowOn, uTexel;
-uniform sampler2D uShadow;
-float sunlit() {
-  if (uShadowOn < 0.5) return 1.0;
-  vec3 p = vL.xyz / vL.w * 0.5 + 0.5;
-  vec2 e = min(p.xy, 1.0 - p.xy);
-  float edge = smoothstep(0.0, 0.08, min(e.x, e.y)); // shadows fade out at the edge of the shadow area
-  if (edge <= 0.0 || p.z >= 1.0) return 1.0;
-  float s = 0.0, z = p.z - 0.00005;
-  vec2 t = p.xy / uTexel - 0.5, f = fract(t), b = (floor(t) + 0.5) * uTexel;
-  for (int i = -1; i <= 2; i++) for (int j = -1; j <= 2; j++) { // 4x4 texels, edge ones weighted for smooth soft edges
-    float w = (i == -1 ? 1.0 - f.x : i == 2 ? f.x : 1.0) * (j == -1 ? 1.0 - f.y : j == 2 ? f.y : 1.0);
-    s += w * (z <= texture2D(uShadow, b + vec2(float(i), float(j)) * uTexel).r ? 1.0 : 0.0);
-  }
-  return mix(1.0, s / 9.0, edge);
-}
+varying vec3 vN, vW; varying vec4 vC;
+uniform vec3 uTint, uCam, uSun, uHaze; uniform vec2 uFog; uniform float uAlpha, uTime;
 void main() {
   vec3 n = normalize(vN), col = vC.rgb * uTint, c;
   float m = vC.a, f = smoothstep(uFog.x, uFog.y, distance(vW, uCam));
@@ -112,7 +96,7 @@ void main() {
   else {
     float ndl = max(dot(n, uSun), 0.0);
     vec3 amb = mix(vec3(0.40, 0.38, 0.35), vec3(0.50, 0.53, 0.58), n.y * 0.5 + 0.5); // sky light from above, ground bounce below
-    c = col * (amb + vec3(1.0, 0.96, 0.86) * 0.56 * ndl * (ndl > 0.0 ? sunlit() : 1.0));
+    c = col * (amb + vec3(1.0, 0.96, 0.86) * 0.56 * ndl);
     if (m > 0.5) { // water: slow ripples with little sparkles
       float r = sin(vW.x * 0.35 + uTime * 1.3) * sin(vW.z * 0.3 - uTime * 1.1) + 0.5 * sin((vW.x + vW.z) * 0.8 + uTime * 2.0);
       c *= 1.0 + 0.07 * r; c += vec3(0.3) * pow(max(r - 0.9, 0.0) / 0.6, 2.0);
@@ -120,9 +104,6 @@ void main() {
   }
   gl_FragColor = vec4(mix(c, uHaze, f), uAlpha);
 }`;
-// Shadow pass: depth only, as seen from the sun
-const SVS = `attribute vec3 aPos; uniform mat4 uLVP, uM; void main() { gl_Position = uLVP * uM * vec4(aPos, 1.0); }`;
-const SFS = `precision mediump float; void main() { gl_FragColor = vec4(1.0); }`;
 // Sky: one big triangle behind everything, pale at the horizon, deep blue above, with a soft sun
 const KVS = `attribute vec3 aPos; varying vec2 vP; void main() { vP = aPos.xy; gl_Position = vec4(aPos.xy, 0.0, 1.0); }`;
 const KFS = `precision highp float; varying vec2 vP;
@@ -145,8 +126,7 @@ function shader(type, src) {
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
   return s;
 }
-const UNIFORMS = ['uVP', 'uM', 'uNM', 'uLVP', 'uTint', 'uCam', 'uSun', 'uHaze', 'uFog', 'uAlpha', 'uTime', 'uShadowOn', 'uTexel',
-  'uShadow', 'uF', 'uR', 'uU', 'uTop', 'uTan', 'uSpace'];
+const UNIFORMS = ['uVP', 'uM', 'uNM', 'uTint', 'uCam', 'uSun', 'uHaze', 'uFog', 'uAlpha', 'uTime', 'uF', 'uR', 'uU', 'uTop', 'uTan', 'uSpace'];
 function program(vs, fs) {
   const p = gl.createProgram();
   gl.attachShader(p, shader(gl.VERTEX_SHADER, vs)); gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs));
@@ -157,32 +137,11 @@ function program(vs, fs) {
   for (const n of UNIFORMS) u[n] = gl.getUniformLocation(p, n);
   return u;
 }
-const MAIN = program(VS, FS), SHADOWP = program(SVS, SFS), SKYP = program(KVS, KFS);
+const MAIN = program(VS, FS), SKYP = program(KVS, KFS);
 let prog = MAIN; // the program in use
 function use(p) { prog = p; gl.useProgram(p.p); }
 for (const i of [0, 1, 2]) gl.enableVertexAttribArray(i);
 gl.enable(gl.DEPTH_TEST);
-
-// Shadow map: the sun's view of everything near the player, kept in a depth texture
-const SM = 2048, SH = 130; // texture size, half-width of the shadow area in world units
-const depthExt = gl.getExtension('WEBGL_depth_texture');
-const shadowTex = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, shadowTex);
-for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST],
-  [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
-let shadowFB = null;
-if (depthExt) {
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, SM, SM, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
-  const colour = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, colour);
-  gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA4, SM, SM);
-  shadowFB = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFB);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shadowTex, 0);
-  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, colour);
-  quality.shadows = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-}
-// no shadows possible: a 1x1 white texture keeps the shader happy
-if (!quality.shadows) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
 
 function makeBuffer(arr) {
   const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
@@ -321,7 +280,9 @@ function drnd() { dseed = dseed + 0x6D2B79F5 | 0; let t = Math.imul(dseed ^ dsee
 
 const N = 7, R = 12, B = 44, P = B + R, W = N * P;
 const LIM = 280; // how far past the town you can go
-const STATIC = [], CLOUDS = [];
+let STATIC = []; // where mesh() puts the world's shapes: the home town now, the Tuscan town while it is built
+const CLOUDS = [];
+let italy = null; // the Tuscan town, built the first time the jet flies there
 // Everything solid: car bumps into the ones with car:true, the helicopter flies over all of them.
 const solids = [];
 function box(x, y, z, w, h, d, col, mat = 0) { mesh(BOX, x, y + h / 2, z, w, h, d, 0, col, mat); } // y = bottom
@@ -634,7 +595,7 @@ function riverDist(x, z) {
   return best;
 }
 // water grown by m (m < 0 shrinks it), ignoring the island
-const wet = (x, z, m = 0) => inLake(x, z, m) || riverDist(x, z) < RIVERW / 2 + m;
+const wet = (x, z, m = 0) => inLake(x, z, m) || riverDist(x, z) < RIVERW / 2 + m || (italy !== null && italy.wet(x, z, m));
 // clearly on the water: at least m from any shore. Clearly on land: at least m from the water.
 const inWater = (x, z, m = 0) => wet(x, z, -m) && !onIsland(x, z, m);
 const onLand = (x, z, m = 0) => !wet(x, z, m) || onIsland(x, z, -m);
@@ -720,7 +681,7 @@ function inStation(x, z) {
 }
 // ---------- Construction site, out in the countryside at the end of a dirt track from a town road ----------
 // Its spot is worked out without rnd() too, so the town, mountains, lake and stars stay exactly where they were.
-const YW = 35, YD = 25, TRACK = 40, TRACKW = 8, GATEW = 12; // half the yard's width and depth, the track's length and width, the gate's width
+const YW = 60, YD = 45, TRACK = 40, TRACKW = 8, GATEW = 12; // half the yard's width and depth, the track's length and width, the gate's width
 const site = (() => {
   let best = null;
   for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (let i = 1; i <= 6; i++) {
@@ -745,11 +706,44 @@ function inSiteArea(x, z, m = 0) {
   const [lx, lz] = site.local(x, z);
   return Math.abs(lx) < YW + 3 + m && lz > -YD - TRACK - m && lz < YD + 3 + m;
 }
+// ---------- Airport: a small airfield out in the countryside, at the end of a paved road from a town road ----------
+// Its spot is worked out without rnd() too. In airport coordinates lx runs along the runway and lz points away from town.
+const AW = 95, AD = 40, AROAD = 30; // half the field's length and depth, and the road out to it
+const RWY = 85, RWYZ = 24, RWYW = 14; // half the runway's length, where its middle line runs, and its width
+const PARK = [8, -26], RWY_START = -78; // where the jet waits on the apron, and where it starts its take-off run
+// t: the town to place it round (its corner, size, block step and edge), where it can't go, and which spot is best
+function placeAirport(t) {
+  let best = null;
+  for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (let i = 1; i < t.n; i++) {
+    const c = i * t.p, edge = AROAD + AD; // field centre: past the end of the road, plus the new road
+    const x = t.x + (ox ? (ox > 0 ? t.w + edge : -edge) : c), z = t.z + (oz ? (oz > 0 ? t.w + edge : -edge) : c);
+    const ap = { x, z, ox, oz, a: Math.atan2(ox, oz), roadW: t.roadW };
+    ap.local = (px, pz) => { const dx = px - x, dz = pz - z; return [dx * oz - dz * ox, dx * ox + dz * oz]; }; // along the runway, outward
+    ap.world = (lx, lz) => [x + lx * oz + lz * ox, z - lx * ox + lz * oz];
+    ap.run = ap.a + Math.PI / 2; // the heading down the runway
+    let clear = true;
+    for (let lx = -AW - 6; lx <= AW + 6 && clear; lx += 4) for (let lz = -AD - AROAD; lz <= AD + 6 && clear; lz += 4) {
+      const [px, pz] = ap.world(lx, lz);
+      if (px < t.x - t.lim + 10 || px > t.x + t.w + t.lim - 10 || pz < t.z - t.lim + 10 || pz > t.z + t.w + t.lim - 10 || t.blocked(px, pz)) clear = false;
+    }
+    const score = t.score(x, z);
+    if (clear && (!best || score > best.score)) best = Object.assign(ap, { score });
+  }
+  return best;
+}
+const airport = placeAirport({ x: 0, z: 0, w: W, p: P, n: N, lim: LIM, roadW: R,
+  blocked: (x, z) => wet(x, z, 10) || inStationArea(x, z, 12) || inSiteArea(x, z, 12) || mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4 + 8),
+  score: (x, z) => Math.min(Math.hypot(x - station.x, z - station.z), Math.hypot(x - site.x, z - site.z)) }); // as far from both as it gets
+// the airport's whole footprint (field and road), where no trees grow
+function inAirportArea(x, z, m = 0, ap = airport) {
+  const [lx, lz] = ap.local(x, z);
+  return Math.abs(lx) < AW + 3 + m && lz > -AD - AROAD - m && lz < AD + 3 + m;
+}
 for (let k = 0; k < 600; k++) {
   const x = -LIM + rnd() * (W + 2 * LIM), z = -LIM + rnd() * (W + 2 * LIM);
   if (townDist(x, z) > 14 && freeSpot(x, z, 3)) {
     const pine = drnd() < .5;
-    if (inStationArea(x, z, 3) || inSiteArea(x, z, 3)) { // same numbers a tree would use, and the same room kept round it
+    if (inStationArea(x, z, 3) || inSiteArea(x, z, 3) || inAirportArea(x, z, 3)) { // same numbers a tree would use, and the same room kept round it
       rnd(); rnd(); ghosts.push({ x0: x - .8, x1: x + .8, z0: z - .8, z1: z + .8 });
     } else tree(x, z, pine);
   }
@@ -804,7 +798,7 @@ station.firstSolid = solids.length; // the station's solids come last
     put(ICO1, side * (TRACKW / 2 + .5 + wob(k + 40) * .6), 0, -YD - TRACK + (k + .5) * TRACK / 16, s * 1.6, s * .7, s * 1.6, TRACKC);
   }
   put(BOX, 0, .03, 0, 2 * YW, .06, 2 * YD, SANDY); // the yard
-  for (let k = 0; k < 8; k++) put(DISC, (wob(k + 7) - .5) * 2 * (YW - 6), .065, (wob(k + 21) - .5) * 2 * (YD - 6), 9, .01, 6, RUT); // worn patches
+  for (let k = 0; k < 20; k++) put(DISC, (wob(k + 7) - .5) * 2 * (YW - 6), .065, (wob(k + 21) - .5) * 2 * (YD - 6), 9, .01, 6, RUT); // worn patches
   // fence: two rails and a post every few steps, the gap in the middle of the near side is the gate
   const fenceSeg = (lx0, lz0, lx1, lz1) => {
     const cx = (lx0 + lx1) / 2, cz = (lz0 + lz1) / 2, w = Math.abs(lx1 - lx0) || .3, d = Math.abs(lz1 - lz0) || .3;
@@ -820,14 +814,379 @@ station.firstSolid = solids.length; // the station's solids come last
   put(BOX, 0, 4.7, -YD, GATEW + 1, 1.4, .3, SIGN);
   for (let k = -2; k <= 2; k++) put(BOX, k * 2.2, 4.7, -YD - .2, .9, 1.4, .1, DARK); // dark warning stripes
   // a site cabin in the corner by the gate
-  const [cabX, cabZ] = site.world(-29, -19);
-  put(BOX, -29, 1.5, -19, 6, 3, 4, RAIL); put(BOX, -29, 3.15, -19, 6.4, .3, 4.4, hex(0x1e88e5));
-  put(BOX, -29, 1.6, -21.01, 1.2, 1.2, .06, GLASSW, 3); put(BOX, -26.8, 1.6, -21.01, 1.2, 1.2, .06, GLASSW, 3);
+  const CABX = -YW + 6, CABZ = -YD + 6, [cabX, cabZ] = site.world(CABX, CABZ);
+  put(BOX, CABX, 1.5, CABZ, 6, 3, 4, RAIL); put(BOX, CABX, 3.15, CABZ, 6.4, .3, 4.4, hex(0x1e88e5));
+  put(BOX, CABX, 1.6, CABZ - 2.01, 1.2, 1.2, .06, GLASSW, 3); put(BOX, CABX + 2.2, 1.6, CABZ - 2.01, 1.2, 1.2, .06, GLASSW, 3);
   solid(cabX, cabZ, Math.abs(site.ox) ? 4.4 : 6.4, Math.abs(site.ox) ? 6.4 : 4.4, 3.3);
-  for (const [cx, cz] of [[-8, -22], [8, -22], [-6, -24], [6, -24], [30, -20], [-31, 20], [31, 20], [0, 22]]) { // traffic cones
+  for (const [cx, cz] of [[-8, 3 - YD], [8, 3 - YD], [-6, 1 - YD], [6, 1 - YD], [YW - 5, 5 - YD], [4 - YW, YD - 5], [YW - 4, YD - 5], [0, YD - 3]]) { // traffic cones
     put(frustumShape(.3), cx, .55, cz, .9, 1.1, .9, hex(0xff6d00));
     put(BOX, cx, .08, cz, 1.1, .16, 1.1, hex(0xff6d00));
   }
+}
+// the airfield: the road in, an apron, a taxiway, a runway with lights along its edges, a terminal, a control tower,
+// a hangar, a windsock and a round helicopter pad. The jet itself moves, so it is drawn each frame.
+function buildAirport(ap) {
+  const put = placer(ap.x, ap.z, ap.a), TARMAC = hex(0x4a4f55), APRON = hex(0xcfccc4), MARK = hex(0xffc928), WALL = hex(0xeceff1);
+  const sol = (lx, lz, w, d, top) => { const [x, z] = ap.world(lx, lz); solid(x, z, ap.ox ? d : w, ap.ox ? w : d, top); };
+  put(BOX, 0, .01, -AD - AROAD / 2, ap.roadW, .02, AROAD + 1, ROAD); // the road from the end of the town road to the apron
+  for (let t = -AD - AROAD + 4; t < -AD - 3; t += 6) put(BOX, 0, .03, t, .35, .04, 3, YEL);
+  put(BOX, 0, .03, -AD + 14, 64, .06, 28, APRON); // apron
+  put(BOX, 30, .025, (-12 + RWYZ - RWYW / 2) / 2, 10, .05, RWYZ - RWYW / 2 + 12, APRON); // taxiway out to the runway
+  for (let t = -12; t < RWYZ - RWYW / 2; t += 4) put(BOX, 30, .06, t + 1.5, .3, .02, 2.5, MARK);
+  put(BOX, PARK[0], .07, PARK[1], 12, .02, .4, MARK); put(BOX, PARK[0] - 6, .07, PARK[1], .4, .02, 6, MARK); // the jet's parking T
+  put(BOX, 0, .04, RWYZ, 2 * RWY + 10, .08, RWYW, TARMAC); // runway
+  for (const sd of [-1, 1]) put(BOX, 0, .085, RWYZ + sd * (RWYW / 2 - .6), 2 * RWY + 6, .02, .3, LINE); // edge lines
+  for (let t = -RWY + 14; t < RWY - 12; t += 12) put(BOX, t, .085, RWYZ, 5, .02, .5, LINE); // centre dashes
+  for (const end of [-1, 1]) for (let k = -2; k <= 2; k++) if (k) put(BOX, end * (RWY - 3), .085, RWYZ + k * 2.4, 5, .02, 1.2, LINE); // threshold stripes
+  for (let t = -RWY; t <= RWY; t += 15) for (const sd of [-1, 1]) { // lights along both edges
+    put(BOX, t, .2, RWYZ + sd * (RWYW / 2 + 1), .25, .4, .25, POLE);
+    put(BOX, t, .5, RWYZ + sd * (RWYW / 2 + 1), .5, .3, .5, LAMPLIGHT, 3);
+  }
+  // terminal: white with a long glass front facing the runway
+  put(BOX, -50, 3.5, -30, 26, 7, 14, WALL);
+  put(BOX, -50, 3.6, -22.95, 23, 2.6, .12, GLASSW); put(BOX, -50, 3.6, -37.05, 23, 2.6, .12, GLASSW);
+  put(BOX, -50, 7.2, -30, 27, .4, 15, hex(0x90a4ae));
+  put(BOX, -40, 1.3, -22.9, 2.4, 2.6, .14, hex(0x546e7a)); // door
+  sol(-50, -30, 26, 14, 7.4);
+  // control tower: a tall white shaft with a glass room on top; its red light blinks (drawn each frame)
+  put(BOX, -78, 9, -28, 4, 18, 4, WALL);
+  put(BOX, -78, 18.2, -28, 7.6, .4, 7.6, hex(0x546e7a));
+  put(BOX, -78, 19.8, -28, 7, 2.8, 7, GLASSW);
+  put(BOX, -78, 21.4, -28, 7.6, .5, 7.6, hex(0x546e7a));
+  put(BOX, -78, 22.9, -28, .2, 2.6, .2, POLE);
+  sol(-78, -28, 7.6, 7.6, 24);
+  const [lx0, lz0] = ap.world(-78, -28); ap.light = [lx0, 24.4, lz0];
+  // hangar: grey walls under a round roof, its big door facing the apron
+  put(BOX, 58, 3, -26, 26, 6, 22, hex(0xb0bec5));
+  put(prismShape(16, 1, 'x'), 58, 6, -26, 26.4, 7, 22.4, hex(0x78909c));
+  put(BOX, 44.95, 2.7, -26, .12, 5.2, 16, hex(0x546e7a));
+  for (let t = -7; t <= 7; t += 2.8) put(BOX, 44.88, 2.7, -26 + t, .1, 5.2, .15, hex(0x37474f));
+  sol(58, -26, 26, 22, 9.6);
+  // windsock: an orange and white sock on a pole
+  put(CYL6, 85, 3, 2, .25, 6, .25, POLE);
+  for (let k = 0; k < 4; k++) put(prismShape(8, .85, 'x'), 85.9 + k * .75, 5.6, 2, .75, 1.1 * (1 - k * .12), 1.1 * (1 - k * .12), k % 2 ? FENCE : hex(0xff6d00));
+  sol(85, 2, .8, .8, 6);
+  // round helicopter pad marked H
+  [ap.hx, ap.hz] = ap.world(-80, 2);
+  mesh(DISC, ap.hx, .12, ap.hz, 2 * HELIR, .24, 2 * HELIR, 0, hex(0x4a5056));
+  for (let i = 0; i < 24; i++) {
+    const a = i / 24 * Math.PI * 2;
+    mesh(BOX, ap.hx + Math.sin(a) * (HELIR - .8), .26, ap.hz + Math.cos(a) * (HELIR - .8), 1.6, .04, .4, a, MARK);
+  }
+  const hput = placer(ap.hx, ap.hz, ap.a);
+  for (const sd of [-1.4, 1.4]) hput(BOX, sd, .27, 0, .6, .04, 4.4, FENCE);
+  hput(BOX, 0, .27, 0, 2.4, .04, .6, FENCE);
+}
+airport.firstSolid = solids.length; // the airport's solids come after the station's
+buildAirport(airport);
+
+// ---------- The Tuscan town: a little town by a lake, with a river through it, hills and mountains round it ----------
+// It is built the first time the jet flies there, far off to the east so nothing in it ever meets the home town.
+// It has its own random numbers, so it comes out the same every time and never moves anything at home.
+const IX = 4000, NI = 4, RI = 9, BI = 34, IP = BI + RI, WI = NI * IP, LIMI = 300; // where it starts, its blocks and streets, how far past it you can go
+const RIVERWI = 14, RIVERU = 3 * IP + IP / 2; // the river's width, and the row of blocks it runs down
+const BRIDGE_L = 16, BRIDGE_FLAT = 9, BRIDGE_H = 2.6; // half a bridge's length, half its flat top, the height of its deck
+const PX = IX + 2 * IP, PZ = 2 * IP; // the piazza's middle: the town's middle crossing
+const TUSCAN = [0xf3e0b5, 0xe8b96a, 0xdc9a6c, 0xf2d48f, 0xeec29a, 0xe6cfa3].map(hex), TERRACOTTA = [0xc2532e, 0xb5492a, 0xcc6238].map(hex);
+const STREET = hex(0x9b9286), PAVE = hex(0xd8cbb0), SHUTTER = hex(0x4e7d3a), DARKWIN = hex(0x3e2f25), BRIDGESTONE = hex(0xc9b99a), CYPRESS = prismShape(8, .15);
+// distance from a point to the Tuscan town (0 inside it)
+const italyDist = (x, z) => Math.hypot(Math.max(IX - x, 0, x - IX - WI), Math.max(-z, 0, z - WI));
+function cypress(x, z, y0 = 0) { // tall, thin and dark, pointed at the top
+  const h = 8 + rnd() * 4, w = 1.7 + rnd() * .4, turn = drnd() * 6;
+  mesh(CYL6, x, y0 + .5, z, .5, 1, .5, turn, BARK);
+  mesh(CYPRESS, x, y0 + 1 + h / 2, z, w, h, w, turn, hex(pick([0x2e5b2e, 0x355f35, 0x2a5230])));
+  solid(x, z, 1.4, 1.4, y0 + h + 1);
+}
+function poplar(x, z) { // tall and narrow, lighter and leafier
+  const h = 9 + rnd() * 3, turn = drnd() * 6;
+  mesh(CYL6, x, 1, z, .6, 2, .6, turn, BARK);
+  mesh(ICO1, x, 1.5 + h / 2, z, 2.6, h, 2.6, turn, hex(pick([0x7cb342, 0x8bc34a, 0x9ccc65])));
+  solid(x, z, 1.6, 1.6, h + 2);
+}
+function olive(x, z) { // low and wide, silvery grey-green
+  const s = .85 + rnd() * .3, turn = drnd() * 6;
+  mesh(CYL6, x, .9 * s, z, .7 * s, 1.8 * s, .7 * s, turn + .3, hex(0x6d5a43));
+  mesh(ICO1, x, 2.6 * s, z, 4.4 * s, 2.4 * s, 4 * s, turn, hex(pick([0x8a9a5b, 0x97a66b, 0x7f8f55])));
+  mesh(ICO1, x + .6 * s, 3.3 * s, z - .4 * s, 2.6 * s, 1.6 * s, 2.6 * s, turn, hex(0xa3b078));
+  solid(x, z, 1.6, 1.6, 4 * s);
+}
+// a block running along x from x0 to x1, w wide, its top sloping from h0 to h1 above y0 (bridge ramps and their walls)
+function slope(x0, x1, z, w, h0, h1, col, y0 = 0) {
+  const c = [[x0, y0, z - w / 2], [x1, y0, z - w / 2], [x1, y0, z + w / 2], [x0, y0, z + w / 2],
+    [x0, y0 + h0, z - w / 2], [x1, y0 + h1, z - w / 2], [x1, y0 + h1, z + w / 2], [x0, y0 + h0, z + w / 2]];
+  const m = [0, 1, 2].map(k => c.reduce((s, p) => s + p[k], 0) / 8), q = i => sub(c[i], m);
+  mesh([[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [3, 2, 6, 7], [0, 3, 7, 4], [1, 2, 6, 5]].map(f => f.map(q)), m[0], m[1], m[2], 1, 1, 1, 0, col);
+}
+// how high the road is at (x, z): up on a bridge's hump, or 0
+function bridgeHeight(bridges, x, z) {
+  for (const b of bridges) {
+    const du = Math.abs(x - b.x);
+    if (Math.abs(z - b.z) < RI / 2 + .3 && du < BRIDGE_L) return du < BRIDGE_FLAT ? BRIDGE_H : BRIDGE_H * (BRIDGE_L - du) / (BRIDGE_L - BRIDGE_FLAT);
+  }
+  return 0;
+}
+const bridgeY = (x, z) => italy === null ? 0 : bridgeHeight(italy.bridges, x, z);
+// shuttered windows on the street sides of a w x d house, one row per floor
+function shutters(cx, cz, w, d, floors, sides) {
+  for (let f = 0; f < floors; f++) for (const [nx, nz] of sides) {
+    const len = nx ? d : w, k = Math.max(1, Math.floor((len - 1) / 3)), half = nx ? w / 2 : d / 2, y = 1.1 + f * 3.2;
+    for (let i = 0; i < k; i++) {
+      const t = (i - (k - 1) / 2) * 3, x = cx + nx * half + (nz ? t : 0), z = cz + nz * half + (nx ? t : 0);
+      box(x, y, z, nx ? .14 : 1.9, 1.7, nx ? 1.9 : .14, SHUTTER); // the open green shutters
+      box(x + nx * .04, y + .1, z + nz * .04, nx ? .18 : .9, 1.5, nx ? .9 : .18, DARKWIN);
+    }
+  }
+}
+// a tall, narrow town house: plaster in a warm colour, two to four floors, a low red-tiled roof
+function tuscanHouse(cx, cz, w, d, sides) {
+  const floors = 2 + Math.floor(rnd() * 3), h = floors * 3.2 + .4;
+  box(cx, 0, cz, w, h, d, pick(TUSCAN));
+  mesh(frustumShape(.45, .45), cx, h + .7, cz, w + .9, 1.4, d + .9, 0, pick(TERRACOTTA));
+  shutters(cx, cz, w, d, floors, sides);
+  solid(cx, cz, w, d, h + 1.4);
+}
+// a line of points about 10 m apart along pts, with the corners rounded off
+function smoothLine(pts) {
+  for (let k = 0; k < 3; k++) {
+    const out = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      out.push({ x: a.x * .75 + b.x * .25, z: a.z * .75 + b.z * .25 }, { x: a.x * .25 + b.x * .75, z: a.z * .25 + b.z * .75 });
+    }
+    out.push(pts[pts.length - 1]); pts = out;
+  }
+  const even = [pts[0]];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], l = Math.hypot(b.x - a.x, b.z - a.z), n = Math.ceil(l / 10);
+    for (let k = 1; k <= n; k++) even.push({ x: a.x + (b.x - a.x) * k / n, z: a.z + (b.z - a.z) * k / n });
+  }
+  return even.filter((p, i) => i === 0 || i === even.length - 1 || Math.hypot(p.x - even[i - 1].x, p.z - even[i - 1].z) > 4);
+}
+function buildItaly() {
+  const saved = [seed, dseed];
+  seed = 20261022; dseed = 515; STATIC = [];
+  const it = { name: 'italy', x0: IX - LIMI, x1: IX + WI + LIMI, z0: -LIMI, z1: WI + LIMI, first: solids.length, hills: [], mountains: [], bridges: [],
+    trees: { cypress: 0, poplar: 0, olive: 0 } };
+  const grow = (k, f) => (...a) => { it.trees[k]++; f(...a); };
+  const cyp = grow('cypress', cypress), pop = grow('poplar', poplar), oli = grow('olive', olive);
+  box(IX + WI / 2, -1, WI / 2, WI + 2 * LIMI + 500, 1, WI + 2 * LIMI + 500, hex(0xa8cf6c)); // grass everywhere, a little golden
+
+  // the lake, south of town: round patches of water grown until it is as big as the home lake
+  const lk = { x: IX + 100, z: WI + 175, discs: [] };
+  {
+    const G = 4, H = 240, n = 2 * H / G, cells = new Uint8Array(n * n), cands = [];
+    for (let i = -H; i <= H; i += 10) for (let j = -H; j <= H; j += 10) cands.push([i, j, Math.hypot(i, j * 1.3)]);
+    cands.sort((p, q) => p[2] - q[2]);
+    let area = 0;
+    for (const [dx, dz] of cands) {
+      const x = lk.x + dx, z = lk.z + dz;
+      if (italyDist(x, z) < LAKER + 45 || x - LAKER < it.x0 + 15 || x + LAKER > it.x1 - 15 || z + LAKER > it.z1 - 15) continue;
+      const fresh = [];
+      for (let i = Math.floor((dx - LAKER + H) / G); i <= (dx + LAKER + H) / G; i++) for (let j = Math.floor((dz - LAKER + H) / G); j <= (dz + LAKER + H) / G; j++) {
+        if (i < 0 || j < 0 || i >= n || j >= n || cells[i * n + j]) continue;
+        if (Math.hypot(i * G - H + G / 2 - dx, j * G - H + G / 2 - dz) < LAKER) fresh.push(i * n + j);
+      }
+      if (fresh.length < 40) continue;
+      lk.discs.push({ x, z, r: LAKER });
+      for (const k of fresh) { cells[k] = 1; area += G * G; }
+      if (area >= lake.area) break;
+    }
+    lk.area = area;
+  }
+  it.lake = lk;
+  // the river: down from the hills in the north, straight through town between the houses, and on into the lake
+  it.river = smoothLine([[95, -LIMI + 12], [105, -230], [140, -160], [RIVERU, -90], [RIVERU, -40], [RIVERU, WI + 50], [RIVERU - 15, WI + 85], [lk.x - IX + 10, lk.z - 60]]
+    .map(([u, v]) => ({ x: IX + u, z: v })));
+  const inLakeI = (x, z, m) => lk.discs.some(d => Math.hypot(x - d.x, z - d.z) < d.r + m);
+  const riverDistI = (x, z) => {
+    let best = Infinity;
+    for (let i = 1; i < it.river.length; i++) {
+      const a = it.river[i - 1], b = it.river[i], ex = b.x - a.x, ez = b.z - a.z;
+      const t = Math.max(0, Math.min(1, ((x - a.x) * ex + (z - a.z) * ez) / (ex * ex + ez * ez)));
+      best = Math.min(best, Math.hypot(x - a.x - ex * t, z - a.z - ez * t));
+    }
+    return best;
+  };
+  it.inLake = inLakeI;
+  it.wet = (x, z, m = 0) => x > IX - LIMI - 100 && (inLakeI(x, z, m) || riverDistI(x, z) < RIVERWI / 2 + m);
+
+  // the airport, on the side of town away from the lake
+  const ap = placeAirport({ x: IX, z: 0, w: WI, p: IP, n: NI, lim: LIMI, roadW: RI, blocked: (x, z) => it.wet(x, z, 10),
+    score: (x, z) => Math.hypot(x - lk.x, z - lk.z) });
+  it.airport = ap;
+
+  // rolling hills close round the town, green and golden, and mountains further out
+  const roomy = (x, z, r) => !it.wet(x, z, r * 1.4 + 8) && !inAirportArea(x, z, r * 1.4 + 6, ap) &&
+    ![...it.hills, ...it.mountains].some(m => Math.hypot(m.x - x, m.z - z) < (m.r + r) * .95) && x > it.x0 + 10 && x < it.x1 - 10 && z > it.z0 + 10 && z < it.z1 - 10;
+  for (let tries = 0; it.hills.length < 16 && tries < 4000; tries++) {
+    const x = it.x0 + rnd() * (it.x1 - it.x0), z = it.z0 + rnd() * (it.z1 - it.z0), r = 16 + rnd() * 14, d = italyDist(x, z);
+    if (d > r * 1.4 + 25 && d < r + 150 && roomy(x, z, r)) it.hills.push({ x, z, r, h: 12 + rnd() * 12 });
+  }
+  for (let tries = 0; it.mountains.length < 10 && tries < 4000; tries++) {
+    const x = it.x0 + rnd() * (it.x1 - it.x0), z = it.z0 + rnd() * (it.z1 - it.z0), r = 26 + rnd() * 22, d = italyDist(x, z);
+    if (d > r + 150 && roomy(x, z, r)) it.mountains.push({ x, z, r, h: 45 + rnd() * 35 });
+  }
+  const GREEN = [0x8bc34a, 0x7cb342].map(hex), GOLD = [0xd8b75c, 0xc9a84e].map(hex), TROCK = [0xa39480, 0x8f8270].map(hex);
+  [...it.hills, ...it.mountains].forEach((m, k) => {
+    const hill = k < it.hills.length, step = hill ? 4 : 5, L = Math.ceil(m.h / step), size = i => 2 * m.r * (1 - i / L) * .95 + 6;
+    let cx = m.x, cz = m.z;
+    for (let i = 0; i < L; i++) {
+      const f = i / L, sz = size(i), top = i < L - 1 ? size(i + 1) / sz : .45;
+      const col = (hill ? (k % 2 ? GOLD : GREEN) : f < .5 ? GREEN : TROCK)[i % 2];
+      mesh(frustumShape(top), cx, i * step + step / 2, cz, sz, step, sz, 0, col);
+      solid(cx, cz, sz, sz, (i + 1) * step, i === 0);
+      m.peak = { x: cx, z: cz, y: (i + 1) * step };
+      cx += (rnd() - .5) * m.r * .1; cz += (rnd() - .5) * m.r * .1;
+    }
+    if (hill) for (let c = 0; c < 3; c++) cyp(m.peak.x + (c - 1) * 2.4, m.peak.z + (c % 2) * 1.6, m.peak.y); // cypresses on the hilltop
+  });
+
+  // streets of old stone, and the blocks between them
+  for (let i = 0; i <= NI; i++) {
+    const c = i * IP;
+    box(IX + c, 0, WI / 2, RI, .02, WI + RI, STREET);
+    box(IX + WI / 2, 0, c, WI + RI, .02, RI, STREET);
+  }
+  box(PX, 0, PZ, IP, .14, IP, hex(0xe6d8bb)); // the piazza's paving
+  for (let bi = 0; bi < NI; bi++) for (let bj = 0; bj < NI; bj++) {
+    const cx = IX + bi * IP + IP / 2, cz = bj * IP + IP / 2, q = BI / 2 - 1.2;
+    if (IX + RIVERU === cx) { // the river's row: paved banks either side of the water, with poplars
+      for (const s of [-1, 1]) {
+        box(cx + s * (RIVERWI / 2 + 5), 0, cz, 10, .12, BI, PAVE);
+        for (const t of [-10, 10]) pop(cx + s * (RIVERWI / 2 + 7), cz + t);
+      }
+      continue;
+    }
+    box(cx, 0, cz, BI, .12, BI, PAVE);
+    for (const ox of [-1, 1]) for (const oz of [-1, 1]) {
+      const qx = cx + ox * BI / 4, qz = cz + oz * BI / 4;
+      if (Math.abs(qx - PX) < IP / 2 && Math.abs(qz - PZ) < IP / 2) continue; // a corner of the piazza
+      if (rnd() < .12) { box(qx, 0, qz, q, .16, q, hex(0x9ccc65)); oli(qx, qz); continue; } // a little garden with an olive tree
+      if (rnd() < .5) for (const s of [-1, 1]) tuscanHouse(qx + s * q / 4, qz, q / 2 - .2, q, s === ox ? [[ox, 0], [0, oz]] : [[0, oz]]);
+      else for (const s of [-1, 1]) tuscanHouse(qx, qz + s * q / 4, q, q / 2 - .2, s === oz ? [[0, oz], [ox, 0]] : [[ox, 0]]);
+    }
+  }
+  // the piazza: a fountain in the middle, a church with a striped front, a bell tower, and café umbrellas
+  mesh(DISC, PX, .45, PZ, 6.4, .9, 6.4, 0, hex(0xe0d6c2));
+  mesh(DISC, PX, .92, PZ, 5.4, .08, 5.4, 0, LAKEBLUE, 1);
+  mesh(CYL6, PX, 1.9, PZ, .8, 2.4, .8, 0, hex(0xe0d6c2));
+  mesh(DISC, PX, 3.1, PZ, 2.4, .3, 2.4, 0, hex(0xe0d6c2));
+  mesh(ICO1, PX, 3.6, PZ, .9, .9, .9, 0, hex(0xe0d6c2));
+  solid(PX, PZ, 6.4, 6.4, 3.4);
+  const chx = PX - 13, chz = PZ + 15.5; // the church faces the fountain across the street
+  box(chx, 0, chz, 13, 10, 12, hex(0xf3ead8));
+  mesh(GABLE, chx, 11.2, chz, 13.6, 2.4, 12.6, 0, TERRACOTTA[0]);
+  for (let k = 0; k < 9; k++) box(chx, k * 1.2, chz - 6.08, 13.2, 1.2, .16, k % 2 ? hex(0x2f5d50) : hex(0xf7f3ea));
+  mesh(GABLE, chx, 11.2, chz - 6.08, 13.4, 2.4, .2, 0, hex(0xf7f3ea));
+  mesh(LENS, chx, 7.6, chz - 6.22, 2.8, 2.8, .14, 0, hex(0x9575cd), 3); // round window
+  box(chx, 0, chz - 6.2, 2.4, 3.6, .14, hex(0x5d4037)); // door
+  solid(chx, chz, 13, 12, 12.4);
+  const tx = PX + 13, tz = PZ + 13, BELL = hex(0xe6d3a8); // the bell tower
+  box(tx, 0, tz, 6, 24, 6, BELL);
+  box(tx, 24, tz, 6.8, .6, 6.8, hex(0xd2bd8f));
+  box(tx, 24.6, tz, 6, 4.2, 6, BELL);
+  for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) box(tx + nx * 3.02, 25.2, tz + nz * 3.02, nx ? .1 : 2.4, 2.8, nx ? 2.4 : .1, hex(0x3e2f25));
+  mesh(ICO1, tx, 26, tz, 1.6, 1.8, 1.6, 0, hex(0xffc107)); // the bell
+  box(tx, 28.8, tz, 6.8, .6, 6.8, hex(0xd2bd8f));
+  mesh(frustumShape(0), tx, 30.9, tz, 6.4, 3, 6.4, 0, TERRACOTTA[1]);
+  solid(tx, tz, 6, 6, 32.4);
+  it.landmarks = { fountain: [PX, PZ], church: [chx, chz], tower: [tx, tz, 32.4] };
+  for (const [ux, uz] of [[-16, -16], [-9, -18], [-17, -9], [16, -16], [9, -17]]) { // café umbrellas, red and white
+    const x = PX + ux, z = PZ + uz;
+    mesh(DISC, x, .75, z, 1.6, .08, 1.6, 0, hex(0xfafafa));
+    mesh(CYL6, x, 1.4, z, .12, 2.8, .12, 0, POLE);
+    mesh(CONE8, x, 3.2, z, 4, 1, 4, 0, hex(0xd84a3a)); mesh(CONE8, x, 3.25, z, 2.4, .7, 2.4, 0, hex(0xfafafa));
+    solid(x, z, 1.4, 1.4, 3.8);
+  }
+
+  // water: a sandy beach round the lake, and the river on its gravel bed, with humped stone bridges where the streets cross it
+  for (const d of lk.discs) mesh(DISC, d.x, .045, d.z, 2 * d.r + 10, .09, 2 * d.r + 10, 0, SAND);
+  for (const d of lk.discs) mesh(DISC, d.x, .09, d.z, 2 * d.r, .18, 2 * d.r, 0, LAKEBLUE, 1);
+  for (let i = 1; i < it.river.length; i++) {
+    const a = it.river[i - 1], b = it.river[i], len = Math.hypot(b.x - a.x, b.z - a.z), yaw = Math.atan2(b.x - a.x, b.z - a.z);
+    mesh(BOX, (a.x + b.x) / 2, .045, (a.z + b.z) / 2, RIVERWI + 4, .09, len, yaw, hex(0xcfc4a5));
+    mesh(BOX, (a.x + b.x) / 2, .09, (a.z + b.z) / 2, RIVERWI, .18, len, yaw, LAKEBLUE, 1);
+  }
+  for (const p of it.river) { mesh(DISC, p.x, .045, p.z, RIVERWI + 4, .09, RIVERWI + 4, 0, hex(0xcfc4a5)); mesh(DISC, p.x, .09, p.z, RIVERWI, .18, RIVERWI, 0, LAKEBLUE, 1); }
+  for (let j = 0; j <= NI; j++) {
+    const b = { x: IX + RIVERU, z: j * IP };
+    it.bridges.push(b);
+    box(b.x, BRIDGE_H - .5, b.z, 2 * BRIDGE_FLAT, .5, RI, BRIDGESTONE); // the deck
+    for (const s of [-1, 1]) {
+      const foot = b.x + s * BRIDGE_L, top = b.x + s * BRIDGE_FLAT;
+      slope(Math.min(foot, top), Math.max(foot, top), b.z, RI, s < 0 ? 0 : BRIDGE_H, s < 0 ? BRIDGE_H : 0, BRIDGESTONE); // ramp up from the street
+      box(b.x + s * (RIVERWI / 2 + 1), 0, b.z, 2, BRIDGE_H - .5, RI, BRIDGESTONE); // the arch's feet on the banks
+      const wz = b.z + s * (RI / 2 + .3); // the low walls along both sides
+      box(b.x, BRIDGE_H, wz, 2 * BRIDGE_FLAT, 1, .5, hex(0xb8a888));
+      for (const e of [-1, 1]) { const f = b.x + e * BRIDGE_L, t = b.x + e * BRIDGE_FLAT; slope(Math.min(f, t), Math.max(f, t), wz, .5, e < 0 ? 1 : BRIDGE_H + 1, e < 0 ? BRIDGE_H + 1 : 1, hex(0xb8a888)); }
+      solid(b.x, wz, 2 * BRIDGE_L, .5, BRIDGE_H + 1);
+      solids[solids.length - 1].under = true; // the boat goes under it
+    }
+  }
+
+  // the airfield, with cypresses lining its road
+  buildAirport(ap);
+  for (let lz = -AD - AROAD + 4; lz < -AD - 1; lz += 7) for (const s of [-1, 1]) cyp(...ap.world(s * (RI / 2 + 2.5), lz));
+
+  // trees: cypresses along the edge of town, poplars along the river, olive groves and more cypresses about the hills
+  const taken = (x, z, gap) => { for (let i = it.first; i < solids.length; i++) { const s = solids[i]; if (x > s.x0 - gap && x < s.x1 + gap && z > s.z0 - gap && z < s.z1 + gap) return true; } return false; };
+  const free = (x, z, gap) => !taken(x, z, gap) &&
+    ![...it.hills, ...it.mountains].some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4 + gap) && !it.wet(x, z, 4 + gap) &&
+    !inAirportArea(x, z, gap, ap) && italyDist(x, z) > 7 && x > it.x0 + 10 && x < it.x1 - 10 && z > it.z0 + 10 && z < it.z1 - 10;
+  for (let t = 4; t < WI; t += 9) for (const [x, z] of [[IX + t, -RI / 2 - 4], [IX + t, WI + RI / 2 + 4], [IX - RI / 2 - 4, t], [IX + WI + RI / 2 + 4, t]])
+    if (free(x, z, 1)) cyp(x, z);
+  for (let i = 0; i < it.river.length; i += 2) {
+    const a = it.river[Math.max(0, i - 1)], b = it.river[Math.min(it.river.length - 1, i + 1)], l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    for (const s of [-1, 1]) {
+      const x = it.river[i].x + s * (b.z - a.z) / l * (RIVERWI / 2 + 5), z = it.river[i].z - s * (b.x - a.x) / l * (RIVERWI / 2 + 5);
+      if (!inLakeI(x, z, 6) && free(x, z, 1.5)) pop(x, z);
+    }
+  }
+  for (let g = 0, tries = 0; g < 7 && tries < 400; tries++) { // olive groves in neat rows
+    const x = it.x0 + rnd() * (it.x1 - it.x0), z = it.z0 + rnd() * (it.z1 - it.z0);
+    if (italyDist(x, z) < 25 || !free(x, z, 14)) continue;
+    g++;
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) if (free(x + i * 8, z + j * 8, 2)) oli(x + i * 8, z + j * 8);
+  }
+  for (let k = 0, tries = 0; k < 40 && tries < 600; tries++) {
+    const x = it.x0 + rnd() * (it.x1 - it.x0), z = it.z0 + rnd() * (it.z1 - it.z0);
+    if (free(x, z, 3)) { cyp(x, z); k++; }
+  }
+
+  // stars: on the streets, high up for the helicopter, and out on the water for the boat
+  const away = (x, z) => Math.hypot(x - me().x, z - me().z) > 40;
+  it.roadStar = () => {
+    for (;;) {
+      const road = Math.floor(rnd() * (NI + 1)) * IP, along = 6 + rnd() * (WI - 12);
+      const [u, v] = rnd() < .5 ? [road, along] : [along, road], x = IX + u, z = v;
+      if (Math.hypot(x - PX, z - PZ) > 8 && away(x, z)) return { x, y: 2.2 + bridgeHeight(it.bridges, x, z), z, sky: false, phase: rnd() * 6 };
+    }
+  };
+  it.skyStar = () => {
+    const phase = rnd() * 6;
+    if (rnd() < .5) { const p = pick(it.mountains).peak; return { x: p.x, y: p.y + 4, z: p.z, sky: true, phase }; }
+    const x = IX + rnd() * WI, z = rnd() * WI;
+    return { x, y: groundAt(x, z, 3) + 12 + rnd() * 25, z, sky: true, phase };
+  };
+  it.waterStar = () => {
+    for (;;) {
+      let x, z;
+      if (rnd() < .5) { const d = pick(lk.discs), a = rnd() * 6.283, r = Math.sqrt(rnd()) * d.r; x = d.x + Math.cos(a) * r; z = d.z + Math.sin(a) * r; }
+      else { const i = 1 + Math.floor(rnd() * (it.river.length - 1)), a = it.river[i - 1], b = it.river[i], t = rnd(); x = a.x + (b.x - a.x) * t; z = a.z + (b.z - a.z) * t; }
+      if (it.wet(x, z, -4) && bridgeHeight(it.bridges, x, z) === 0 && away(x, z)) return { x, y: 2.2, z, sky: false, water: true, phase: rnd() * 6 };
+    }
+  };
+  it.respawn = s => s.water ? it.waterStar() : s.sky ? it.skyStar() : it.roadStar();
+  it.stars = [];
+  for (let i = 0; i < 10; i++) it.stars.push(it.roadStar());
+  for (let i = 0; i < 8; i++) it.stars.push(it.skyStar());
+  for (let i = 0; i < 8; i++) it.stars.push(it.waterStar());
+
+  it.data = new Float32Array(STATIC);
+  STATIC = [];
+  [seed, dseed] = saved;
+  italy = it; TOWNS.italy = it;
+  return it;
 }
 const CLOUD = [1.5, 1.5, 1.5];
 for (let k = 0; k < 45; k++) { // puffy clouds
@@ -837,7 +1196,12 @@ for (let k = 0; k < 45; k++) { // puffy clouds
   mesh(ICO1, x + 6, y + 4, z + 2, 11, 6, 9, 0, CLOUD, 0, CLOUDS);
   mesh(ICO1, x - w * .3, y + 2.5, z - 1, 9, 4.5, 7, 0, CLOUD, 0, CLOUDS);
 }
-const world = toMesh(STATIC), clouds = toMesh(CLOUDS);
+const clouds = toMesh(CLOUDS);
+// Each town keeps its shapes as one block of numbers, and only the town you are in sits on the graphics card.
+const homeData = new Float32Array(STATIC);
+STATIC = [];
+const placeData = data => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return { buf: b, n: data.length / 10 }; };
+let townMesh = placeData(homeData);
 
 // highest solid thing under (x, z), with a little extra margin around it
 function groundAt(x, z, m = 0) {
@@ -849,7 +1213,7 @@ function groundAt(x, z, m = 0) {
 // ---------- Sounds ----------
 // Everything plays into one master volume, then a soft limiter, so lots of sounds at once never get sharply loud.
 let ac = null, muted = false, master, limiter, noiseBuf, engOscs = [], engGain, lfoDepth, roarGain;
-let rotorLfo, rotorGain, squealGain, siteGain, rotorSpin = 0, lastHorn = -9, lastToot = -9;
+let rotorLfo, rotorGain, squealGain, rotorSpin = 0, lastHorn = -9, lastToot = -9;
 function initAudio() {
   try {
     ac = new AudioContext();
@@ -883,9 +1247,6 @@ function initAudio() {
     squealGain = gain(0); noise().connect(filter('bandpass', 2300, 9)).connect(squealGain).connect(master);
     // the rocket's roar: deep rumbling noise
     roarGain = gain(0); noise().connect(filter('lowpass', 420)).connect(roarGain).connect(master);
-    // the construction site's machines working on their own: a low rumble that only plays when one is near
-    siteGain = gain(0); const rumble = ac.createOscillator(); rumble.type = 'sawtooth'; rumble.frequency.value = 52;
-    rumble.connect(filter('lowpass', 260)).connect(siteGain).connect(master); rumble.start();
   } catch { ac = null; engGain = null; } // no sound on this browser; the game plays on silently
 }
 function toggleMute() {
@@ -920,6 +1281,10 @@ function hiss(dur, vol, from, to, when = 0, type = 'bandpass') {
 function horn() {
   if (T - lastHorn < .55) return;
   lastHorn = T;
+  if (town === 'italy') { // the little Italian car's cheerful two-tone horn
+    for (const [w, f] of [[0, 587], [.2, 740]]) { tone(f, .18, 'square', .03, w, 0, 6); tone(f, .18, 'triangle', .06, w, 0, 6); }
+    return;
+  }
   for (const w of [0, .26]) { tone(392, .2, 'square', .03, w, 0, 8); tone(494, .2, 'triangle', .06, w, 0, 8); }
 }
 function toot() {
@@ -947,6 +1312,9 @@ function whoosh(up) {
   hiss(.6, .16, up ? 300 : 2500, up ? 2500 : 300);
   tone(up ? 200 : 700, .5, 'sine', .04, 0, up ? 700 : 200);
 }
+// the airport's "ding-dong" when you climb into the jet, and the tyres' squeak as it touches down
+function dingDong() { tone(659, .9, 'sine', .08, 0, 0, 4); tone(523, 1.3, 'sine', .08, .5, 0, 4); }
+function squeak() { hiss(.22, .14, 2600, 1300); tone(1500, .16, 'sine', .03, 0, 1100); }
 function fanfare() {
   [523, 523, 784, 1047, 784, 1047].forEach((f, i) => tone(f, i === 5 ? .5 : .2, 'triangle', .08, i * .12, 0, 7));
   tone(262, .9, 'sine', .05, .36); // a soft low note underneath
@@ -977,6 +1345,8 @@ const boat = { x: 0, y: .2, z: 0, a: 0, v: 0, steer: 0, hop: 0, vy: 0, onRamp: f
 // lift = the time T the rocket last left the ground, or null
 const rocket = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, pitch: 0, count: 0, thrust: 0, auto: false, lift: null };
 const buggy = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, steer: 0, spin: 0, g: 0, up: 0, peak: 0 }; // up = how fast a ramp is lifting it, peak = highest point of this jump
+// phase: parked, ground (on the runway), climb, air, land (by itself: leg turn, final, roll, taxi), trip or arrive; town: where it is
+const jet = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, bank: 0, pitch: 0, phase: 'parked', town: 'home', leg: '', wp: 0, t: 0 };
 let scene = 'earth', snapCam = false; // earth, space or moon; snapCam jumps the camera after a scene change
 const cam = { x: 3 * P, y: 6, z: P / 2 - 12 };
 const keys = new Set();
@@ -984,25 +1354,27 @@ let mode = 'car', started = false, score = 0, lastBoing = 0, T = 0, yayTimer = 0
 const fog = [120, 280];
 const stars = [], confetti = [];
 const RAINBOW = [0xff5252, 0xffd740, 0x69f0ae, 0x40c4ff, 0xe040fb, 0xff9100].map(hex);
-const me = () => ({ car, boat, heli, rocket, buggy, digger, truck, dozer, crane, monster, saucer, bouncer })[mode];
+const me = () => ({ car, boat, heli, jet, rocket, buggy, digger, truck, dozer, crane, monster, saucer, bouncer })[mode];
 
 // ---------- Construction site: the four machines, dirt piles and toy blocks ----------
 // x, z and a (the heading, or the crane's arm) are in the world; r is how much room a machine takes up.
 const spot = (lx, lz, la) => { const [x, z] = site.world(lx, lz); return { x, y: 0, z, a: site.a + la }; };
-const digger = { kind: 'digger', ...spot(-25, 0, 0), v: 0, steer: 0, spin: 0, r: 3, load: 0, act: null };
-const truck = { kind: 'truck', ...spot(-18.4, 0, 0), v: 0, steer: 0, spin: 0, r: 3.4, load: 0, act: null, phase: 'load', wait: 0 };
-const dozer = { kind: 'dozer', ...spot(0, -10, Math.PI / 2), v: 0, steer: 0, spin: 0, r: 3, blade: 0, bladeT: 0, leg: 0, jobT: 0, skip: null };
-const crane = { kind: 'crane', ...spot(25, 10, 0), v: 0, r: 3.4, reach: 10, hy: 20, held: null, act: null, dir: 'build' };
+// they start well apart, each in its own corner of the yard with dirt (or the crane's blocks) close by
+const digger = { kind: 'digger', ...spot(-38, 5, 0), v: 0, steer: 0, spin: 0, r: 3, load: 0, act: null };
+const truck = { kind: 'truck', ...spot(-14, -28, 0), v: 0, steer: 0, spin: 0, r: 3.4, load: 0, act: null };
+const dozer = { kind: 'dozer', ...spot(8, -15, Math.PI / 2), v: 0, steer: 0, spin: 0, r: 3, blade: 0, bladeT: 0 };
+const crane = { kind: 'crane', ...spot(38, 15, 0), v: 0, r: 3.4, reach: 10, hy: 20, held: null, act: null };
 const machines = [digger, truck, dozer, crane];
-for (const m of machines) Object.assign(m, { home: { x: m.x, z: m.z, a: m.a }, auto: false, blocked: 0, round: 0, beepT: 0 });
+for (const m of machines) m.beepT = 0;
 const MACHINE_ICON = { digger: '🚜', truck: '🚚', dozer: '🚜', crane: '🏗️' };
 const isMachine = md => md in MACHINE_ICON;
-const REACH = 6.6, MAXPILES = 12, TRUCKMAX = 4, HOOKUP = 20, STACKMAX = 8;
+const REACH = 6.6, MAXPILES = 20, TRUCKMAX = 4, HOOKUP = 20, STACKMAX = 8;
 const piles = [], blocks = [];
 function addPile(lx, lz, amount, refill = false) { const [x, z] = site.world(lx, lz); piles.push({ x, z, amount, spread: 1, refill, t: 0 }); }
-addPile(-25, 9.5, 40, true); addPile(-2, 6, 3); addPile(10, -6, 2); // the big pile the digger works on, and two small ones
+addPile(-38, 14.5, 40, true); // the big pile in front of the digger, which fills up again
+for (const [lx, lz] of [[19, -15], [-32, -22], [-8, 14], [46, -28], [8, 33]]) addPile(lx, lz, 25); // and five more for everyone to move
 for (let i = 0; i < 10; i++) { // ten toy blocks in two rows next to the crane
-  const [x, z] = site.world(17 + (i % 5) * 2.6, i < 5 ? 17 : 20);
+  const [x, z] = site.world(30 + (i % 5) * 2.6, i < 5 ? 22 : 25);
   blocks.push({ x, z, y: 0, held: false, col: RAINBOW[i % 6] });
 }
 
@@ -1168,6 +1540,11 @@ function waterStar() { // only the boat can catch these: out on the lake and the
 for (let i = 0; i < 14; i++) stars.push(roadStar());
 for (let i = 0; i < 10; i++) stars.push(skyStar());
 for (let i = 0; i < 10; i++) stars.push(waterStar());
+// the towns: how far each one goes, its airport and stars. The Tuscan town joins once it is built.
+const TOWNS = { home: { name: 'home', x0: -LIM, x1: W + LIM, z0: -LIM, z1: W + LIM, airport, stars, data: homeData,
+  respawn: s => s.water ? waterStar() : s.sky ? skyStar() : roadStar() } };
+let town = 'home';
+const here = () => TOWNS[town];
 
 // ducks paddle about the lake and the river, and scatter with a quack when the boat comes near
 const ducks = [];
@@ -1185,8 +1562,11 @@ for (let tries = 0; animals.length < 7 && tries < 500; tries++) {
 }
 
 function hits(x, z, r = 1.7, self = null) { // self: the machine asking, which is not in its own way
-  if (x < -LIM || x > W + LIM || z < -LIM || z > W + LIM) return true;
-  for (const o of solids) if (o.car && x > o.x0 - r && x < o.x1 + r && z > o.z0 - r && z < o.z1 + r) return true;
+  const t = here();
+  if (x < t.x0 || x > t.x1 || z < t.z0 || z > t.z1) return true;
+  const boat = mode === 'boat'; // the boat slips under the bridges' walls
+  for (const o of solids) if (o.car && !(boat && o.under) && x > o.x0 - r && x < o.x1 + r && z > o.z0 - r && z < o.z1 + r) return true;
+  if (jetBlocks(x, z, r)) return true;
   for (const b of blocks) if (!b.held && b.y < 1.5 && Math.abs(x - b.x) < 1 + r && Math.abs(z - b.z) < 1 + r) return true;
   for (const m of machines) if (m !== self && Math.hypot(x - m.x, z - m.z) < m.r + r - .5) return true;
   return false;
@@ -1214,16 +1594,21 @@ const HELP = {
   digger: 'Arrows or WASD = drive · Space = scoop or dump · H = car · M = sound',
   truck: 'Arrows or WASD = drive · Space = tip the load · H = car · M = sound',
   dozer: 'Arrows or WASD = drive · Space = blade up or down · H = car · M = sound',
-  crane: 'Arrows = swing the arm and move the hook · Space = grab or let go · H = car · M = sound'
+  crane: 'Arrows = swing the arm and move the hook · Space = grab or let go · H = car · M = sound',
+  carJet: 'Arrows or WASD = drive · Space = beep beep! · H = jet · M = sound',
+  jetRunway: 'Hold W, Space or ↑ = take off · H = car · M = sound',
+  jetAir: 'Arrows = steer · W or Space = go up · S or Shift = go down · H = land · M = sound',
+  jetAuto: 'Sit back and enjoy the flight! · M = sound'
 };
 const landed = () => mode === 'rocket' && scene === 'earth' && rocket.y === 0;
 // the badge and help line follow the vehicle, and where it is
 function refreshHud() {
-  const atStation = (mode === 'car' && inStation(car.x, car.z)) || (mode === 'heli' && inStation(heli.x, heli.z)), nm = nearMachine();
-  const badge = { car: nm ? 'H = ' + MACHINE_ICON[nm.kind] : atStation ? 'H = 🚀' : 'H = 🚁', boat: 'H = 🚁', heli: atStation ? 'H = 🚀' : 'H = 🚗', buggy: 'H = 🚀',
-    monster: 'H = 🚀', saucer: 'H = 🚀', bouncer: 'H = 🚀',
+  const atStation = (mode === 'car' && inStation(car.x, car.z)) || (mode === 'heli' && inStation(heli.x, heli.z)), nm = nearMachine(), nj = nearJet();
+  const badge = { car: nm ? 'H = ' + MACHINE_ICON[nm.kind] : atStation ? 'H = 🚀' : nj ? 'H = ✈️' : 'H = 🚁', boat: 'H = 🚁', heli: atStation ? 'H = 🚀' : 'H = 🚗', buggy: 'H = 🚀',
+    monster: 'H = 🚀', saucer: 'H = 🚀', bouncer: 'H = 🚀', jet: jet.phase === 'ground' ? 'H = 🚗' : (jet.phase === 'air' || jet.phase === 'arrive') ? 'H = 🛬' : '✈️',
     rocket: landed() ? 'H = 🚗' : '🚀', digger: 'H = 🚗', truck: 'H = 🚗', dozer: 'H = 🚗', crane: 'H = 🚗' }[mode];
-  const help = nm ? 'carSite' : atStation ? mode + 'Station' : mode !== 'rocket' ? mode :
+  const help = nm ? 'carSite' : atStation ? mode + 'Station' : nj ? 'carJet' :
+    mode === 'jet' ? (jet.phase === 'ground' ? 'jetRunway' : (jet.phase === 'air' || jet.phase === 'arrive') ? 'jetAir' : 'jetAuto') : mode !== 'rocket' ? mode :
     scene === 'space' ? 'rocketSpace' : scene === 'moon' || scene === 'planet' ? 'rocketMoon' : 'rocketPad';
   const b = document.getElementById('mode'), h = document.getElementById('help');
   if (b.textContent !== badge) b.textContent = badge;
@@ -1238,7 +1623,7 @@ function toBoat(from) {
   setMode('boat'); splashSound(); splash(boat.x, boat.z, 30); puff(boat.x, 1, boat.z, 15);
 }
 function toCar() {
-  Object.assign(car, { x: boat.x, z: boat.z, a: boat.a, v: Math.max(-8, Math.min(22, boat.v)), steer: boat.steer });
+  Object.assign(car, { x: boat.x, y: 0, z: boat.z, a: boat.a, v: Math.max(-8, Math.min(22, boat.v)), steer: boat.steer });
   setMode('car'); splashSound(); splash(car.x, car.z, 20); puff(car.x, 1, car.z, 15);
 }
 // ---------- Rocket: board on the station, blast off, space, the Moon and home again ----------
@@ -1300,6 +1685,8 @@ function planetOut() { // the planet's vehicle comes out beside the rocket
 
 function switchVehicle() {
   if (isMachine(mode)) { leaveMachine(); return; }
+  if (mode === 'jet') { if (jet.phase === 'ground') leaveJet(); else if (jet.phase === 'air' || jet.phase === 'arrive') startLanding(); return; } // nothing while it lands or travels
+  if (nearJet()) { boardJet(); return; }
   const nm = nearMachine();
   if (nm) { boardMachine(nm); return; }
   if (mode === 'rocket') { if (landed()) leaveRocket(); return; } // nothing happens in flight
@@ -1365,7 +1752,8 @@ function driveCar(dt) {
     if (Math.abs(car.v) > 3 && T - lastBoing > .5) { boing(); lastBoing = T; }
     car.v *= -0.3;
   }
-  if (inWater(car.x, car.z, SHORE)) toBoat(car);
+  car.y = bridgeY(car.x, car.z); // up over a Tuscan bridge, where the river below stays the boat's
+  if (car.y === 0 && inWater(car.x, car.z, SHORE)) toBoat(car);
 }
 
 function driveBoat(dt) {
@@ -1457,8 +1845,9 @@ function flyHeli(dt) {
   if (fwd) heli.v += 20 * dt; else if (back) heli.v -= 20 * dt; else heli.v *= Math.pow(.4, dt);
   heli.v = Math.max(-10, Math.min(32, heli.v));
   heli.a += ((left ? 1 : 0) - (right ? 1 : 0)) * 1.7 * dt;
-  heli.x = Math.max(-LIM, Math.min(W + LIM, heli.x + Math.sin(heli.a) * heli.v * dt));
-  heli.z = Math.max(-LIM, Math.min(W + LIM, heli.z + Math.cos(heli.a) * heli.v * dt));
+  const t = here();
+  heli.x = Math.max(t.x0, Math.min(t.x1, heli.x + Math.sin(heli.a) * heli.v * dt));
+  heli.z = Math.max(t.z0, Math.min(t.z1, heli.z + Math.cos(heli.a) * heli.v * dt));
 
   const ground = groundAt(heli.x, heli.z, 3);
   heli.lift -= dt;
@@ -1472,6 +1861,150 @@ function flyHeli(dt) {
 
 const upKeys = () => held('KeyW', 'Space', 'ArrowUp', 'PageUp'), downKeys = () => held('KeyS', 'ShiftLeft', 'ShiftRight', 'ArrowDown', 'PageDown');
 const turnKeys = () => (held('ArrowLeft', 'KeyA') ? 1 : 0) - (held('ArrowRight', 'KeyD') ? 1 : 0);
+
+// ---------- The jet: board on the apron, take off down the runway, fly, land by itself, or fly off to the other town ----------
+const CRUISE = 35, LIFTOFF = 32, JET_MIN = 15, JET_TOP = 65, TRIP_EDGE = 40, TRIP_TIME = 6; // speeds, heights, the trip
+const trip = { t: 0, to: 'home' };
+function parkJet(tn) { // on its spot on the apron, nose towards the terminal
+  const ap = TOWNS[tn].airport, [x, z] = ap.world(...PARK);
+  Object.assign(jet, { x, y: 0, z, a: ap.run - Math.PI, v: 0, vy: 0, bank: 0, pitch: 0, phase: 'parked', town: tn, leg: '' });
+}
+parkJet('home');
+// the parked jet is in the car's way, wings and all
+function jetBlocks(x, z, r) {
+  if (jet.phase !== 'parked' || jet.town !== town) return false;
+  const dx = x - jet.x, dz = z - jet.z, s = Math.sin(jet.a), c = Math.cos(jet.a);
+  return Math.abs(dx * s + dz * c) < 7.5 + r && Math.abs(dx * c - dz * s) < 6.5 + r;
+}
+function nearJet() { return mode === 'car' && jet.phase === 'parked' && jet.town === town && Math.hypot(car.x - jet.x, car.z - jet.z) < 13; }
+function boardJet() { // the airport chime, and the jet waits at the start of the runway
+  const ap = here().airport, [x, z] = ap.world(RWY_START, RWYZ);
+  Object.assign(jet, { x, y: 0, z, a: ap.run, v: 0, vy: 0, bank: 0, pitch: 0, phase: 'ground', leg: '' });
+  setMode('jet'); dingDong(); puff(car.x, 1, car.z, 15); snapCam = true;
+}
+function leaveJet() { // the jet goes back to its spot on the apron, and the car comes out next to it
+  parkJet(town);
+  const ap = here().airport;
+  let spot = null;
+  for (let r = 10; !spot && r < 60; r += 2) for (let k = 0; k < 16 && !spot; k++) {
+    const x = jet.x + Math.cos(k / 16 * 6.283) * r, z = jet.z + Math.sin(k / 16 * 6.283) * r;
+    if (!hits(x, z) && onLand(x, z, SHORE) && inAirportArea(x, z, 0, ap)) spot = { x, z };
+  }
+  Object.assign(car, spot || { x: jet.x, z: jet.z }, { y: 0, a: ap.a + Math.PI, v: 0, steer: 0 }); // facing back towards town
+  setMode('car'); whoosh(false); puff(car.x, 1, car.z, 15); snapCam = true;
+}
+const jetMove = dt => { jet.x += Math.sin(jet.a) * jet.v * dt; jet.z += Math.cos(jet.a) * jet.v * dt; };
+// the highest ground under the jet and a little ahead of it, plus room: it lifts over hills, mountains and buildings in time
+function jetFloor(room) {
+  let g = 0;
+  for (const d of [0, 30, 60]) g = Math.max(g, groundAt(jet.x + Math.sin(jet.a) * d, jet.z + Math.cos(jet.a) * d, 8));
+  return g + room;
+}
+function steerJet(turn, dt) { // turn: -1 to 1, and the jet banks into it
+  jet.a += turn * .9 * dt;
+  jet.bank += (-turn * .55 - jet.bank) * Math.min(1, dt * 3);
+}
+function headFor(x, z, dt) { // turns towards a point, no faster than the child can
+  const want = Math.atan2(x - jet.x, z - jet.z), d = Math.atan2(Math.sin(want - jet.a), Math.cos(want - jet.a));
+  steerJet(Math.max(-1, Math.min(1, d * 2.5)), dt);
+}
+const easeTo = (target, k, dt) => { jet.y += (target - jet.y) * Math.min(1, dt * k); };
+function flyJet(dt) {
+  const y0 = jet.y, ap = here().airport;
+  if (jet.phase === 'ground') { // hold up to roll down the runway; it lifts off by itself once fast enough
+    jet.v = upKeys() ? Math.min(LIFTOFF, jet.v + 6 * dt) : Math.max(0, jet.v - 8 * dt);
+    jetMove(dt);
+    if (jet.v >= LIFTOFF || ap.local(jet.x, jet.z)[0] > RWY - 4) { jet.phase = 'climb'; jet.v = LIFTOFF; }
+  } else if (jet.phase === 'climb') { // climbs away from the runway by itself
+    jet.v += (CRUISE - jet.v) * Math.min(1, dt);
+    jet.y += 7 * dt; jetMove(dt);
+    if (jet.y >= 25) jet.phase = 'air';
+  } else if (jet.phase === 'air' || jet.phase === 'arrive') {
+    jet.v += (CRUISE - jet.v) * Math.min(1, dt);
+    if (jet.phase === 'arrive') { // down out of the clouds, heading for the airport
+      steerJet(0, dt); easeTo(45, 1.2, dt);
+      if ((jet.t -= dt) <= 0) jet.phase = 'air';
+    } else {
+      steerJet(turnKeys(), dt);
+      jet.vy += ((upKeys() ? 10 : downKeys() ? -10 : 0) - jet.vy) * Math.min(1, dt * 3);
+      jet.y += jet.vy * dt;
+    }
+    jetMove(dt);
+    const floor = jetFloor(JET_MIN); // never lower than this, and never up into the clouds unless a mountain is in the way
+    if (jet.y < floor) { easeTo(floor, 3, dt); jet.vy = Math.max(0, jet.vy); }
+    jet.y = Math.min(jet.y, Math.max(JET_TOP, floor));
+    const t = here();
+    if (jet.phase === 'air' && (jet.x < t.x0 - TRIP_EDGE || jet.x > t.x1 + TRIP_EDGE || jet.z < t.z0 - TRIP_EDGE || jet.z > t.z1 + TRIP_EDGE)) startTrip();
+  } else if (jet.phase === 'land') landJet(dt, ap);
+  jet.pitch += (Math.atan2((jet.y - y0) / Math.max(dt, 1e-3), Math.max(jet.v, 5)) * .8 - jet.pitch) * Math.min(1, dt * 4);
+}
+function startLanding() { jet.phase = 'land'; jet.leg = 'turn'; }
+// Landing by itself: round to a point far out on the runway's line, down along the line onto the runway, roll out,
+// and along the taxiway to its spot on the apron. If it isn't lined up near the runway it goes round and tries again.
+const TOUCH = -RWY + 25, FINAL = -RWY - 320; // in airport coordinates: the touchdown spot, and the point it turns in at
+const TAXI = [[30, RWYZ], [30, -14], [PARK[0] + 10, PARK[1]], PARK];
+function landJet(dt, ap) {
+  const [lx, lz] = ap.local(jet.x, jet.z);
+  if (jet.leg === 'turn') {
+    jet.v += (28 - jet.v) * Math.min(1, dt);
+    headFor(...ap.world(FINAL, RWYZ), dt);
+    easeTo(40, .8, dt);
+    const floor = jetFloor(JET_MIN);
+    if (jet.y < floor) easeTo(floor, 3, dt);
+    if (Math.hypot(lx - FINAL, lz - RWYZ) < 75) jet.leg = 'final';
+    jetMove(dt);
+  } else if (jet.leg === 'final') {
+    jet.v += (28 - jet.v) * Math.min(1, dt);
+    headFor(...ap.world(Math.max(lx, FINAL) + 70, RWYZ), dt); // follow the runway's line
+    const along = TOUCH - lx, floor = lx > -RWY - 15 ? 0 : jetFloor(6);
+    easeTo(Math.max(floor, Math.min(38, along * .17)), 3, dt);
+    const off = Math.abs(lz - RWYZ), err = Math.abs(Math.atan2(Math.sin(ap.run - jet.a), Math.cos(ap.run - jet.a)));
+    if (along > 0 && along < 90 && (off > 5 || err > .25)) jet.leg = 'turn'; // not lined up: round again
+    else if (along <= 2) { // touchdown: a squeak of the tyres and a puff of dust
+      jet.y = 0; jet.leg = 'roll'; squeak();
+      for (const sx of [-1.6, 1.6]) dust(jet.x + Math.cos(jet.a) * sx, .3, jet.z - Math.sin(jet.a) * sx, 0, 0);
+    }
+    jetMove(dt);
+  } else if (jet.leg === 'roll') { // brakes along the middle of the runway
+    jet.v = Math.max(9, jet.v - 6 * dt);
+    headFor(...ap.world(lx + 30, RWYZ), dt);
+    jet.y = 0; jetMove(dt);
+    if (jet.v <= 9) { jet.leg = 'taxi'; jet.wp = 0; }
+  } else { // taxi to the apron
+    const [wx, wz] = ap.world(...TAXI[jet.wp]), last = jet.wp === TAXI.length - 1;
+    jet.v += ((last ? 4 : 7) - jet.v) * Math.min(1, dt * 2);
+    const want = Math.atan2(wx - jet.x, wz - jet.z), d = Math.atan2(Math.sin(want - jet.a), Math.cos(want - jet.a));
+    jet.a += Math.max(-1.8 * dt, Math.min(1.8 * dt, d)); jet.bank *= Math.pow(.1, dt);
+    jet.y = 0; jetMove(dt);
+    if (Math.hypot(wx - jet.x, wz - jet.z) < (last ? 1.5 : 4) && ++jet.wp === TAXI.length) leaveJet();
+  }
+}
+// the trip: a short flight over a sea of clouds, then down over the other town, coming in towards its airport
+function startTrip() {
+  trip.t = 0; trip.to = town === 'home' ? 'italy' : 'home';
+  scene = 'trip'; clearFx(); whoosh(true);
+  Object.assign(jet, { x: 0, y: 60, z: -150, a: 0, v: 60, vy: 0, bank: 0, pitch: 0, phase: 'trip' });
+}
+function flyTrip(dt) {
+  trip.t += dt;
+  if (trip.t > .3 && italy === null) buildItaly(); // built while you look at the clouds
+  jet.bank = Math.sin(trip.t * 1.3) * .08; jet.y = 60 + Math.sin(trip.t * .9) * 1.5;
+  jetMove(dt);
+  if (trip.t >= TRIP_TIME) arrive();
+}
+function goTo(tn) { // only the town you are in sits on the graphics card
+  if (tn === 'italy' && italy === null) buildItaly();
+  gl.deleteBuffer(townMesh.buf);
+  town = tn; townMesh = placeData(TOWNS[tn].data);
+}
+function arrive() {
+  goTo(trip.to);
+  const t = here(), ap = t.airport;
+  const edge = ap.ox > 0 ? t.x1 - ap.x : ap.ox < 0 ? ap.x - t.x0 : ap.oz > 0 ? t.z1 - ap.z : ap.z - t.z0; // from the airport out to the edge
+  Object.assign(jet, { x: ap.x + ap.ox * (edge + 20), y: 75, z: ap.z + ap.oz * (edge + 20), a: ap.a + Math.PI, v: CRUISE, vy: 0, bank: 0,
+    phase: 'arrive', t: 2.5, town: trip.to });
+  scene = 'earth'; clearFx(); whoosh(false);
+}
 function countdown(dt) {
   const before = rocket.count;
   rocket.count = Math.max(0, rocket.count - dt);
@@ -1749,9 +2282,7 @@ const PLANET_TUNES = [
 ];
 const tuneNow = () => scene === 'planet' ? PLANET_TUNES[planetIx] : SPACE_TUNE;
 let musicT = 0, musicI = 0;
-// ---------- Construction site: driving, working, and the jobs the machines do by themselves ----------
-const LOAD = site.world(-18.4, 0), TIPSPOT = site.world(5, 14), STACK = site.world(25, -5), PATROL = site.world(24, -13);
-const SLOTS = Array.from({ length: 10 }, (_, i) => site.world(17 + (i % 5) * 2.6, i < 5 ? 17 : 20));
+// ---------- Construction site: driving and working. A machine only moves while someone is in it ----------
 const SPEC = { digger: { vmax: 8, turn: 1.5 }, truck: { vmax: 11, turn: 1.1 }, dozer: { vmax: 9, turn: 1.3 } }; // top speeds are about half the car's
 const ACT_TIME = { scoop: 1.8, dump: 1.6, tip: 2.6, grab: 2.2, release: 2.2 }, MAST = 24.6; // seconds each job takes; the height of the crane's arm
 const inYard = (x, z, m = 0) => { const [lx, lz] = site.local(x, z); return Math.abs(lx) < YW - m && Math.abs(lz) < YD - m; };
@@ -1759,7 +2290,6 @@ const clampYard = (x, z, m = 2) => {
   const [lx, lz] = site.local(x, z);
   return site.world(Math.max(-YW + m, Math.min(YW - m, lx)), Math.max(-YD + m, Math.min(YD - m, lz)));
 };
-const angDiff = (a, b) => { const d = (b - a) % (2 * Math.PI); return d > Math.PI ? d - 2 * Math.PI : d < -Math.PI ? d + 2 * Math.PI : d; };
 const ease = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
 const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
 const pileR = p => (1.2 + .5 * Math.sqrt(p.amount)) * Math.sqrt(p.spread);
@@ -1818,7 +2348,7 @@ function driveMachine(m, up, down, left, right, dt, cap = 1) {
   else m.v *= Math.pow(.2, dt);
   m.v = Math.max(-4, Math.min(S.vmax * cap, m.v));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
-  m.steer = m.auto ? target : m.steer + (target - m.steer) * Math.min(1, dt * 6);
+  m.steer += (target - m.steer) * Math.min(1, dt * 6);
   m.a += m.steer * S.turn * dt * Math.max(.6, Math.min(1, Math.abs(m.v) / 3)) * (m.v < -.5 ? -1 : 1);
   m.spin += m.v * dt / 1.1;
   const nx = m.x + Math.sin(m.a) * m.v * dt, nz = m.z + Math.cos(m.a) * m.v * dt;
@@ -1874,17 +2404,20 @@ function actEffect(m, kind) {
 }
 // a block is never put down on a machine or the car
 const spotTaken = (x, z) => machines.some(o => Math.hypot(o.x - x, o.z - z) < o.r + 1.2) || (mode === 'car' && Math.hypot(car.x - x, car.z - z) < 3.8);
+// where a block let go of now would land: on the stack under the hook, or when that is full, on the ground beside it
+function dropSpot(c) {
+  const [hx, hz] = hookAt(c);
+  if (spotTaken(hx, hz)) return null;
+  const top = stackTop(hx, hz);
+  if (top <= (STACKMAX - 1) * 2) return [hx, hz, top];
+  for (const [dx, dz] of [[2.4, 0], [-2.4, 0], [0, 2.4], [0, -2.4]])
+    if (stackTop(hx + dx, hz + dz) === 0 && !spotTaken(hx + dx, hz + dz)) return [hx + dx, hz + dz, 0];
+  return null;
+}
 function releaseBlock(c) {
   const b = c.held;
   if (!b) return;
-  const [hx, hz] = hookAt(c);
-  let at = null; // on the stack under the hook, or when that is full, on the ground beside it
-  if (!spotTaken(hx, hz)) {
-    const top = stackTop(hx, hz);
-    if (top <= (STACKMAX - 1) * 2) at = [hx, hz, top];
-    else for (const [dx, dz] of [[2.4, 0], [-2.4, 0], [0, 2.4], [0, -2.4]])
-      if (!at && stackTop(hx + dx, hz + dz) === 0 && !spotTaken(hx + dx, hz + dz)) at = [hx + dx, hz + dz, 0];
-  }
+  const at = dropSpot(c);
   if (!at) { const v = siteVol(c); if (v > 0) tone(150, .15, 'square', .05 * v, 0, 100); return; } // no room: it stays in the hook
   Object.assign(b, { x: at[0], z: at[1], y: at[2], held: false });
   c.held = null; thud(c);
@@ -1902,101 +2435,10 @@ function craneHeight(c) {
   return a.p < .5 ? HOOKUP + (a.hy - HOOKUP) * ease(a.p / .45) : a.hy + (HOOKUP - a.hy) * ease((a.p - .55) / .45);
 }
 
-// ---- jobs when nobody is in the machine ----
-function blockedAhead(m) { // the car or another machine in the way: 'car', 'machine' or false
-  const x = m.x + Math.sin(m.a) * 4.5, z = m.z + Math.cos(m.a) * 4.5;
-  if (mode === 'car' && Math.hypot(car.x - x, car.z - z) < 6) return 'car';
-  return machines.some(o => o !== m && Math.hypot(o.x - x, o.z - z) < o.r + 1.5) && 'machine';
-}
-// drive towards a spot; true once there (or once it has been stuck behind something for 10 s, to move on to the next job).
-// It waits for the car; after 2 s behind a machine that isn't moving off, it steers round it.
-function goTo(m, tx, tz, dt, tol = 2.5) {
-  if (Math.hypot(tx - m.x, tz - m.z) < tol) { m.blocked = 0; driveMachine(m, false, false, false, false, dt); return true; }
-  const df = angDiff(m.a, Math.atan2(tx - m.x, tz - m.z)), stop = blockedAhead(m);
-  m.blocked = stop ? m.blocked + dt : 0;
-  if (m.blocked > 10) { m.blocked = 0; return true; }
-  if (stop === 'machine' && m.blocked > 2) m.round = 1.5; // swing away from it, then a bit more
-  if (m.round > 0) { m.round -= dt; driveMachine(m, true, false, false, true, dt, .4); return false; }
-  driveMachine(m, !stop && Math.abs(df) < .9, false, df > .05, df < -.05, dt, .6);
-  return false;
-}
-function faceTo(m, tx, tz, dt) {
-  const df = angDiff(m.a, Math.atan2(tx - m.x, tz - m.z));
-  driveMachine(m, false, false, df > .05, df < -.05, dt, .6);
-  return Math.abs(df) <= .06;
-}
-function autoDigger(d, dt) {
-  if (d.act) { driveMachine(d, false, false, false, false, dt); return; }
-  let pile = null;
-  for (const p of piles) if (Math.hypot(p.x - d.x, p.z - d.z) < 14 && (!pile || p.amount > pile.amount)) pile = p;
-  if (!pile) { // back to its spot, or after the big pile if that has been pushed somewhere else
-    const big = piles.find(p => p.refill);
-    if (big && Math.hypot(big.x - d.home.x, big.z - d.home.z) > 14) goTo(d, big.x, big.z, dt, 9); else goTo(d, d.home.x, d.home.z, dt, 1);
-    return;
-  }
-  let aim = pile;
-  if (d.load && Math.hypot(truck.x - d.x, truck.z - d.z) < 12 && truck.load < TRUCKMAX && Math.abs(truck.v) < .5) aim = truck; // loads the truck when it waits
-  if (faceTo(d, aim.x, aim.z, dt)) startAct(d);
-}
-function autoTruck(t, dt) {
-  if (t.act) { driveMachine(t, false, false, false, false, dt); return; }
-  if (t.phase === 'load') {
-    if (goTo(t, LOAD[0], LOAD[1], dt, 2)) {
-      t.wait += dt;
-      if (t.load >= TRUCKMAX || (t.load && t.wait > 25)) { t.phase = 'go'; t.wait = 0; }
-    }
-  } else if (t.phase === 'go') {
-    if (goTo(t, TIPSPOT[0], TIPSPOT[1], dt, 2.5) && Math.abs(t.v) < 1) { startAct(t); t.phase = 'back'; }
-  } else if (goTo(t, LOAD[0], LOAD[1], dt, 2)) { t.phase = 'load'; t.wait = 0; }
-}
-function autoDozer(z, dt) {
-  let small = null, sd = Infinity;
-  for (const p of piles) { // small piles get pushed flat
-    if (p.refill || p.amount > 6 || !inYard(p.x, p.z, 2) || (z.skip && z.skip.p === p && T < z.skip.until)) continue;
-    const d = Math.hypot(p.x - z.x, p.z - z.z);
-    if (d < sd) { sd = d; small = p; }
-  }
-  if (z.target !== small) { z.target = small; z.jobT = 0; }
-  if (small) {
-    z.bladeT = 1; z.jobT += dt;
-    if (z.jobT > 25) { z.skip = { p: small, until: T + 40 }; z.jobT = 0; }
-    goTo(z, small.x, small.z, dt, .5);
-  } else { // nothing to push: drive slowly back and forth
-    z.bladeT = 0;
-    const [tx, tz] = z.leg ? PATROL : [z.home.x, z.home.z];
-    if (goTo(z, tx, tz, dt, 2.5)) z.leg ^= 1;
-  }
-}
-// swing the arm and move the hook towards a spot; true once it is right above it
-function aimCrane(c, tx, tz, dt) {
-  const da = angDiff(c.a, Math.atan2(tx - c.x, tz - c.z)), want = Math.max(5, Math.min(24, Math.hypot(tx - c.x, tz - c.z))), dr = want - c.reach;
-  c.a += Math.max(-.6 * dt, Math.min(.6 * dt, da));
-  c.reach += Math.max(-6 * dt, Math.min(6 * dt, dr));
-  return Math.abs(da) < .02 && Math.abs(dr) < .2;
-}
-const isTop = b => !blocks.some(o => o !== b && !o.held && o.y > b.y && Math.abs(o.x - b.x) < 2 && Math.abs(o.z - b.z) < 2);
-const reachable = (c, b) => { const d = Math.hypot(b.x - c.x, b.z - c.z); return d > 5 && d < 24; };
-function autoCrane(c, dt) {
-  if (c.act) return;
-  const near = (x, z) => Math.hypot(x - STACK[0], z - STACK[1]) < 3;
-  if (c.held) { // build the tower; once all blocks are in it, put them back in their row
-    let target = STACK;
-    if (c.dir === 'clear') target = SLOTS.find(s => !blocks.some(b => !b.held && Math.hypot(b.x - s[0], b.z - s[1]) < 2.3)) || STACK;
-    if (aimCrane(c, target[0], target[1], dt) && !spotTaken(target[0], target[1])) startAct(c); // something under the hook: wait
-    return;
-  }
-  let pick = null, pd = Infinity;
-  for (const b of blocks) {
-    if (b.held || !isTop(b) || !reachable(c, b) || near(b.x, b.z) !== (c.dir === 'clear')) continue;
-    const d = Math.hypot(b.x - c.x, b.z - c.z) - (c.dir === 'clear' ? b.y * 10 : 0);
-    if (d < pd) { pd = d; pick = b; }
-  }
-  if (!pick) { c.dir = c.dir === 'build' ? 'clear' : 'build'; return; }
-  if (aimCrane(c, pick.x, pick.z, dt)) startAct(c);
-}
 function pushPiles(z, dt) { // the blade pushes dirt along and spreads it flat
   z.blade += (z.bladeT - z.blade) * Math.min(1, dt * 4);
   if (z.blade < .6) return;
+  if (mode !== 'dozer') return; // parked, the blade rests on the dirt without moving it
   const fx0 = z.x + Math.sin(z.a) * 3.3, fz0 = z.z + Math.cos(z.a) * 3.3;
   for (let i = piles.length - 1; i >= 0; i--) {
     const p = piles[i];
@@ -2009,12 +2451,7 @@ function pushPiles(z, dt) { // the blade pushes dirt along and spreads it flat
 }
 function updateSite(dt) {
   for (const m of machines) {
-    m.auto = m.kind !== mode;
-    if (!m.auto) driveByKid(m, dt);
-    else if (m.kind === 'digger') autoDigger(m, dt);
-    else if (m.kind === 'truck') autoTruck(m, dt);
-    else if (m.kind === 'dozer') autoDozer(m, dt);
-    else autoCrane(m, dt);
+    if (m.kind === mode) driveByKid(m, dt); // the others stay where they were left; a job already started finishes
     updateAct(m, dt);
     if (m.kind === 'dozer') pushPiles(m, dt);
     if (m.kind === 'crane') {
@@ -2029,11 +2466,6 @@ function updateSite(dt) {
     if (p.spread > 1) p.spread = Math.max(1, p.spread - dt * .03);
     if (p.amount < 40 && (p.t += dt) >= 5) { p.t -= 5; p.amount++; }
     if (p.amount >= 40) p.t = 0;
-  }
-  if (siteGain) { // the rumble of the machines working by themselves
-    let level = 0;
-    for (const m of machines) if (m.auto && (Math.abs(m.v) > .3 || m.act)) level += siteVol(m);
-    siteGain.gain.setTargetAtTime(Math.min(.06, level * .12), ac.currentTime, .2);
   }
 }
 // climbing in and out
@@ -2058,27 +2490,29 @@ function leaveMachine() { // the car appears next to the machine, on free ground
       if (inYard(x, z, 2.5) && !hits(x, z)) spot = { x, z };
     }
   Object.assign(car, spot || { x: m.x, z: m.z }, { a: m.a, v: 0, steer: 0 });
-  m.v = 0; setMode('car'); tone(180, .15, 'square', .05, 0, 120); puff(car.x, 1, car.z, 12);
+  m.v = 0; m.steer = 0; setMode('car'); tone(180, .15, 'square', .05, 0, 120); puff(car.x, 1, car.z, 12);
 }
 
 function update(dt) {
   if (scene === 'space') flySpace(dt);
   else if (scene === 'moon') { if (mode === 'buggy') driveBuggy(dt); else flyRocketMoon(dt); }
   else if (scene === 'planet') updatePlanet(dt);
+  else if (scene === 'trip') flyTrip(dt);
   else if (mode === 'rocket') flyRocketEarth(dt);
+  else if (mode === 'jet') flyJet(dt);
   else if (mode === 'car') driveCar(dt); else if (mode === 'boat') driveBoat(dt); else if (mode === 'heli') flyHeli(dt);
   if (scene === 'earth') updateSite(dt);
-  updateDucks(dt);
-  updateAnimals(dt);
+  if (town === 'home') { updateDucks(dt); updateAnimals(dt); }
   refreshHud();
 
   const v = me(), vy = v.y + 1.5;
-  for (let i = 0; i < stars.length && scene === 'earth' && mode !== 'rocket' && !isMachine(mode); i++) { // machines can't catch stars
-    const s = stars[i], sy = s.y + Math.sin(T * 3 + s.phase) * .5;
+  const list = here().stars;
+  for (let i = 0; i < list.length && scene === 'earth' && mode !== 'rocket' && mode !== 'jet' && !isMachine(mode); i++) { // machines and the jet can't catch stars
+    const s = list[i], sy = s.y + Math.sin(T * 3 + s.phase) * .5;
     if (s.water && mode !== 'boat') continue;
     if (Math.hypot(s.x - v.x, s.z - v.z) < (mode === 'heli' ? 5 : 3.5) && Math.abs(sy - vy) < 4.5) {
       cheer(s.x, sy, s.z);
-      stars[i] = s.water ? waterStar() : s.sky ? skyStar() : roadStar();
+      list[i] = here().respawn(s);
     }
   }
   for (let i = 0; i < moonStars.length && scene === 'moon' && mode === 'buggy'; i++) {
@@ -2089,7 +2523,7 @@ function update(dt) {
       moonStars[i] = s.ramp < 0 ? moonGroundStar() : moonRampStar(s.ramp, true);
     }
   }
-  if (scene !== 'earth' && (musicT -= dt) <= 0) { // gentle music in space, on the Moon and on the planets
+  if (scene !== 'earth' && scene !== 'trip' && (musicT -= dt) <= 0) { // gentle music in space, on the Moon and on the planets
     const tune = tuneNow(), f = tune.notes[musicI++ % tune.notes.length];
     tone(f, tune.dur, tune.type, tune.vol, 0, tune.slide ? f * tune.slide : 0); musicT = tune.step;
   }
@@ -2104,9 +2538,10 @@ function update(dt) {
     const t = ac.currentTime, h = mode === 'heli', b = mode === 'boat', bv = Math.abs(boat.v);
     const r = mode === 'rocket', g = mode === 'buggy', th = rocket.thrust, sp = scene === 'space', mc = isMachine(mode), mv = mc ? Math.abs(me().v) : 0;
     const pk = PLANET_CAR.indexOf(mode), pv = pk >= 0 ? Math.abs(me().v) : 0; // the planet vehicles: monster truck, saucer, bouncy car
-    engGain.gain.setTargetAtTime(pk >= 0 ? [.03 + pv * .003, .02, .02 + pv * .002][pk] : mc ? .03 + mv * .003 + (me().act ? .01 : 0) : r ? (sp ? .015 + th * .015 : .02 + th * .05) : g ? .02 + Math.abs(buggy.v) * .002 :
+    const j = mode === 'jet'; // the jet's hum rises with its speed, with a soft rush of air
+    engGain.gain.setTargetAtTime(j ? .03 + jet.v * .0012 : pk >= 0 ? [.03 + pv * .003, .02, .02 + pv * .002][pk] : mc ? .03 + mv * .003 + (me().act ? .01 : 0) : r ? (sp ? .015 + th * .015 : .02 + th * .05) : g ? .02 + Math.abs(buggy.v) * .002 :
       h ? .02 : b ? .03 + bv * .0025 : .025 + Math.abs(car.v) * .002, t, .1);
-    const hz = pk >= 0 ? [34 + pv * 4, 85 + pv * 1.2, 62 + pv * 4][pk] : mc ? 38 + mv * 4 : r ? (sp ? 55 : 38 + th * 25) : g ? 60 + Math.abs(buggy.v) * 4 :
+    const hz = j ? 70 + jet.v * 2.4 : pk >= 0 ? [34 + pv * 4, 85 + pv * 1.2, 62 + pv * 4][pk] : mc ? 38 + mv * 4 : r ? (sp ? 55 : 38 + th * 25) : g ? 60 + Math.abs(buggy.v) * 4 :
       h ? 60 + Math.abs(heli.v) * 1.5 : b ? 38 + bv * 4.5 : 45 + Math.abs(car.v) * 5;
     engOscs.forEach((o, i) => o.frequency.setTargetAtTime(i === 2 ? hz / 2 : hz, t, .1));
     lfoDepth.gain.setTargetAtTime(pk >= 0 ? [.2, .3, .5][pk] : r ? .25 : g ? .5 : b ? .35 : 0, t, .1); // the boat's motor burbles a little
@@ -2114,7 +2549,7 @@ function update(dt) {
     rotorGain.gain.setTargetAtTime(rotorSpin * .14, t, .1);
     rotorLfo.frequency.setTargetAtTime(2 + rotorSpin * 11 + (h ? Math.abs(heli.v) * .1 : 0), t, .1);
     squealGain.gain.setTargetAtTime(mode === 'car' ? squealLevel(car.v, car.steer) * .05 : 0, t, .08);
-    roarGain.gain.setTargetAtTime(!r ? 0 : th * (sp ? .04 : .22), t, .15); // the roar fades to a hum in space
+    roarGain.gain.setTargetAtTime(j ? .02 + jet.v * .0016 : !r ? 0 : th * (sp ? .04 : .22), t, .15); // the roar fades to a hum in space
   }
 }
 
@@ -2138,7 +2573,7 @@ function splash(x, z, n, ring = false) {
     fx.push({ spray: true, x, y: .4, z, vx: Math.cos(a) * sp, vy: ring ? 3.5 + drnd() * 2 : 5 + drnd() * 6, vz: Math.sin(a) * sp, life: 1, max: 1 });
   }
 }
-let foamGap = 0; // metres to go before the next patch of foam
+let foamGap = 0, trailGap = 0; // metres to go before the next patch of foam, and the next puff of the jet's trails
 function updateFx(dt) {
   const bv = Math.abs(boat.v);
   if (mode === 'boat' && bv > 4 && boat.hop === 0 && drnd() < dt * bv * 3) { // white spray behind the boat, more when fast
@@ -2162,6 +2597,11 @@ function updateFx(dt) {
       dust(heli.x + Math.cos(a) * 2.5, g + .3, heli.z + Math.sin(a) * 2.5, Math.cos(a) * sp, Math.sin(a) * sp);
     }
   }
+  if (mode === 'jet' && jet.v > 25 && jet.y > 1 && (trailGap -= jet.v * dt) <= 0 && fx.filter(f => f.trail).length < 180) { // white trails from the wing tips
+    trailGap = 1.5;
+    const m = jetMatrix();
+    for (const sx of [-1, 1]) { const [x, y, z] = apply(m, [sx * 6.7, 1.5, -2.6]); fx.push({ trail: true, x, y, z, a: jet.a, vx: 0, vy: 0, vz: 0, life: 3, max: 3 }); }
+  }
   if (mode === 'rocket' && scene !== 'space' && rocket.thrust > .5 && rocket.y < 25 && drnd() < dt * liftoff.rate) { // smoke rolls out under the engines
     const a = drnd() * 6.283, sp = 6 + drnd() * 6, base = scene === 'earth' ? MOUNTH : 0;
     dust(rocket.x + Math.cos(a) * 3, base + .5, rocket.z + Math.sin(a) * 3, Math.cos(a) * sp, Math.sin(a) * sp, liftoff.most, liftoff.size);
@@ -2176,7 +2616,7 @@ function updateFx(dt) {
   }
   for (const f of fx) {
     f.life -= dt; f.x += f.vx * dt; f.y += f.vy * dt; f.z += f.vz * dt;
-    if (f.dust) { const k = Math.pow(.3, dt); f.vx *= k; f.vz *= k; f.vy *= k; } else if (!f.foam) f.vy -= (f.spray ? 16 : 6) * dt;
+    if (f.dust) { const k = Math.pow(.3, dt); f.vx *= k; f.vz *= k; f.vy *= k; } else if (!f.foam && !f.trail) f.vy -= (f.spray ? 16 : 6) * dt;
     if (f.spray && f.y < .15) f.life = 0; // back in the water
   }
   for (let i = fx.length - 1; i >= 0; i--) if (fx[i].life <= 0) fx.splice(i, 1);
@@ -2197,14 +2637,14 @@ function makePerfWatch(limitMs = 25, secs = 3, warmup = 2) {
   };
 }
 const perfWatch = makePerfWatch();
-function lowerQuality() { quality.shadows = false; quality.maxDpr = 1; resize(); }
+function lowerQuality() { quality.maxDpr = 1; resize(); }
 if (easy) lowerQuality(); // the graphics dropped out here before, so go easy on this computer from the start
 
 // ---------- Drawing ----------
 const ID = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], WHITE = [1, 1, 1], NM = new Float32Array(9);
 const SUN = norm([0.4, 0.8, 0.3]), HAZE = hex(0xc4e6ff), TOP = hex(0x58adf0);
 const RED = hex(0xe53935), DARKRED = hex(0xb71c1c), GLASS = hex(0xb3e5fc), TYRE = hex(0x222222), HUB = hex(0xcfd8dc),
-      LIGHT = hex(0xfff59d), TAIL = hex(0xff1744), SHADOW = hex(0x2f3a2f), GOLD = hex(0xffd600),
+      LIGHT = hex(0xfff59d), TAIL = hex(0xff1744), GOLD = hex(0xffd600),
       HELI = hex(0xffb300), HELIDARK = hex(0x37474f), BLADE = hex(0x263238);
 const build = f => { const out = []; f((shape, x, y, z, w, h, d, col, mat = 0, yaw = 0) => mesh(shape, x, y, z, w, h, d, yaw, col, mat, out)); return toMesh(out); };
 const cube = build(o => o(BOX, 0, 0, 0, 1, 1, 1, WHITE)), ball = build(o => o(ICO1, 0, 0, 0, 1, 1, 1, WHITE));
@@ -2263,6 +2703,52 @@ const boatBody = build(o => {
   o(BOX, -.45, 1.75, -.38, .46, .1, .06, hex(0x263238)); // sunglasses
   o(prismShape(6), 0, 1.35, -2.35, .07, 1.2, .07, CHROME); // flag pole
   [0x009246, 0xffffff, 0xce2b37].forEach((c, i) => o(BOX, .3 + i * .28 - .14, 1.72, -2.35, .28, .4, .03, hex(c))); // Italian flag
+});
+// the private jet: white with a blue stripe, swept wings, two engines at the back and a T-shaped tail
+const JETBLUE = hex(0x1e5bb8), JETGREY = hex(0x90a4ae);
+const jetBody = build(o => {
+  o(prismShape(10, 1, 'z'), 0, 2, 0, 2.2, 2.2, 14, WHITE); // body
+  o(prismShape(10, 0, 'z'), 0, 2, 8.2, 2.2, 2.2, 2.4, WHITE); // nose
+  o(prismShape(10, .35, 'z'), 0, 2.15, -8.2, 2.2, 2, 2.4, WHITE, 0, Math.PI); // tail cone
+  o(frustumShape(.8, .5), 0, 2.75, 6.6, 1.5, .5, 1.6, GLASS); // cockpit windows
+  for (const sx of [-1, 1]) {
+    o(BOX, sx * 1.07, 1.7, -.4, .06, .28, 13, JETBLUE); // stripe
+    for (let z = -4; z <= 4.5; z += 1.5) o(BOX, sx * 1.08, 2.3, z, .06, .42, .6, hex(0x263238)); // windows
+    o(BOX, sx * 3.8, 1.4, -1.2, 6.4, .25, 2.2, WHITE, 0, sx * .45); // swept wings
+    o(BOX, sx * 6.75, 1.75, -2.6, .4, .7, 1, JETBLUE, 0, sx * .45); // winglets
+    o(prismShape(10, 1, 'z'), sx * 1.75, 2.6, -4.6, 1.1, 1.1, 2.8, JETGREY); // engines
+    o(prismShape(10, 1, 'z'), sx * 1.75, 2.6, -3.15, .8, .8, .12, hex(0x37474f));
+    o(BOX, sx * 1.25, 2.6, -4.6, .7, .25, 1.4, JETGREY); // engine pylons
+    o(BOX, sx * 1.6, .6, -1.5, .18, 1.1, .18, HELIDARK); o(WHEEL, sx * 1.6, .35, -1.5, .3, .7, .7, TYRE); // main wheels
+  }
+  o(BOX, 0, .7, 5.6, .18, 1.2, .18, HELIDARK); o(WHEEL, 0, .32, 5.6, .26, .64, .64, TYRE); // nose wheel
+  o(BOX, 0, 4.4, -8.1, .25, 3.4, 2.2, WHITE, 0); // tail fin
+  o(BOX, 0, 4.3, -8.15, .28, .5, 2.2, JETBLUE);
+  o(BOX, 0, 6.1, -8.7, 5.4, .2, 1.4, WHITE); // tail wings on top
+});
+// the little Italian city car: round and cream-coloured, with chrome bumpers and a stripe in the flag's colours
+const CREAMCAR = hex(0xf3e3bf);
+const fiatBody = build(o => {
+  o(bevelShape(2.0, .9, 3.7, .4), 0, .85, 0, 1, 1, 1, CREAMCAR);
+  o(bevelShape(1.75, .8, 2.0, .38), 0, 1.62, -.3, 1, 1, 1, CREAMCAR); // round roof
+  o(BOX, 0, 1.64, .72, 1.4, .5, .06, GLASS); o(BOX, 0, 1.64, -1.32, 1.3, .45, .06, GLASS);
+  for (const sx of [-1, 1]) {
+    o(BOX, sx * .88, 1.64, -.3, .06, .45, 1.5, GLASS); // side windows
+    o(LENS, sx * .62, 1.0, 1.84, .5, .5, .1, LIGHT, 3); // round headlights
+    o(BOX, sx * .7, 1.0, -1.86, .3, .22, .06, TAIL, 3);
+  }
+  for (const sz of [-1, 1]) o(BOX, 0, .58, sz * 1.88, 2.0, .16, .14, CHROME); // bumpers
+  [0x009246, 0xffffff, 0xce2b37].forEach((c, i) => o(BOX, (i - 1) * .22, 1.31, 1.25, .22, .02, 1.0, hex(c))); // flag stripe on the bonnet
+});
+// the sea of clouds the jet flies over between the towns
+const cloudSea = build(o => {
+  const h = i => Math.abs(Math.sin(i * 91.7 + 13.1) * 43758.5453) % 1; // fixed numbers, so nothing here touches rnd() or drnd()
+  for (let i = 0; i < 260; i++) {
+    const x = (h(i) - .5) * 1400, z = -500 + h(i + 500) * 1500, w = 30 + h(i + 900) * 30, y = 10 + h(i + 1300) * 12;
+    o(ICO1, x, y, z, w, 10 + h(i + 1700) * 8, w * .7, CLOUD);
+    o(ICO1, x + w * .3, y + 4, z + 3, w * .6, 9, w * .45, CLOUD);
+  }
+  o(BOX, 0, 8, 250, 1800, 1, 2000, hex(0xe8f1fa)); // a soft white floor below, so no gaps show
 });
 // a little blocky duck
 const duckMesh = build(o => {
@@ -2558,9 +3044,6 @@ function mRY(a) { const c = Math.cos(a), s = Math.sin(a); return [c, 0, -s, 0, 0
 function mRX(a) { const c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]; }
 function mRZ(a) { const c = Math.cos(a), s = Math.sin(a); return [c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]; }
 const chain = (...ms) => ms.reduce(mul);
-function ortho(l, r, b, t, n, f) {
-  return [2 / (r - l), 0, 0, 0, 0, 2 / (t - b), 0, 0, 0, 0, -2 / (f - n), 0, -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1];
-}
 // draw a mesh placed by `model` (turns and per-axis stretches only, so normals just undo the stretch)
 function draw3(m, model, tint = WHITE, alpha = 1) {
   bind(m.buf);
@@ -2577,6 +3060,9 @@ function draw3(m, model, tint = WHITE, alpha = 1) {
 }
 function dbox(cx, cy, cz, w, h, d, yaw, col) { draw3(cube, chain(mT(cx, cy, cz), mRY(yaw), mS(w, h, d)), col); }
 const at = o => chain(mT(o.x, o.y, o.z), mRY(o.a));
+const apply = (m, p) => [0, 1, 2].map(i => m[i] * p[0] + m[4 + i] * p[1] + m[8 + i] * p[2] + m[12 + i]); // where a point of a placed mesh ends up
+const jetMatrix = () => chain(mT(jet.x, jet.y, jet.z), mRY(jet.a), mRX(-jet.pitch), mRZ(jet.bank));
+function drawJet() { draw3(jetBody, jetMatrix()); }
 
 // ---- the construction site ----
 const DIG_REST = [.9, -2.0, -.9], DIG_REACH = [.55, -1.65, -.2], DIG_DIG = [.55, -1.65, -.9], DIG_LIFT = [.9, -1.2, -.9], DIG_TIP = [.9, -1.2, -2.3];
@@ -2621,18 +3107,45 @@ function drawCrane(c) {
   dbox(hx, (MAST - .3 + c.hy) / 2, hz, .1, MAST - .3 - c.hy, .1, 0, STEELDARK); // the rope
   dbox(hx, c.hy, hz, .6, .5, .6, c.a, hex(0xd32f2f)); // the hook
 }
+// the dirt's height at a spot, so the crane's cross lies on top of a pile instead of inside it
+function dirtTop(x, z) {
+  let y = 0;
+  for (const p of piles) { const q = Math.hypot(p.x - x, p.z - z) / pileR(p); if (q < 1) y = Math.max(y, pileH(p) * Math.sqrt(1 - q * q)); }
+  return y;
+}
+// the crane's aiming cross: straight under the hook, on the ground, a pile or the block or stack there; green over a block to grab
+function craneAim(c) {
+  if (c.act) return null; // hidden while the hook goes down and up
+  const [hx, hz] = hookAt(c);
+  if (c.held) { const at = dropSpot(c); return at ? { x: at[0], z: at[1], y: at[2] ? at[2] : dirtTop(at[0], at[1]), green: false } : { x: hx, z: hz, y: Math.max(stackTop(hx, hz), dirtTop(hx, hz)), green: false }; }
+  const b = blockUnder(hx, hz);
+  return b ? { x: hx, z: hz, y: b.y + 2, green: true } : { x: hx, z: hz, y: dirtTop(hx, hz), green: false };
+}
+const AIMW = hex(0xffffff), AIMO = hex(0xff9100), AIMG = hex(0x00e676), AIMGO = hex(0x00a152);
+function drawAim(c) {
+  const a = craneAim(c);
+  if (!a) return;
+  for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) a.y = Math.max(a.y, dirtTop(a.x + dx, a.z + dz)); // no ends buried in a pile
+  for (const k of [1, -1]) { // two crossed bars, each over a slightly bigger outline
+    const yaw = c.a + k * Math.PI / 4;
+    dbox(a.x, a.y + .06, a.z, .95, .1, 2.9, yaw, a.green ? AIMGO : AIMO);
+    dbox(a.x, a.y + .1, a.z, .55, .1, 2.5, yaw, a.green ? AIMG : AIMW);
+  }
+}
 function drawSite() {
   if (Math.hypot(me().x - site.x, me().z - site.z) > 300) return; // too far away to see
   for (const p of piles) draw3(ball, chain(mT(p.x, 0, p.z), mS(2 * pileR(p), 2 * pileH(p), 2 * pileR(p))), DIRTC);
   for (const b of blocks) draw3(blockMesh, mT(b.x, b.y + 1, b.z), b.col);
   drawDigger(digger); drawTruck(truck); drawDozer(dozer); drawCrane(crane);
+  if (mode === 'crane') drawAim(crane);
 }
 
-function drawCar() {
-  const base = at(car);
-  draw3(carBody, base);
+function drawCar() { // in the Tuscan town it is the little Italian car
+  const base = at(car), it = town === 'italy';
+  draw3(it ? fiatBody : carBody, base);
   for (const sx of [-1, 1]) for (const sz of [-1, 1])
-    draw3(carWheel, chain(base, mT(sx * 1.1, .48, sz * 1.35), mRY(sz > 0 ? car.steer * .4 : 0), mRX(car.spin)));
+    draw3(carWheel, it ? chain(base, mT(sx * .95, .42, sz * 1.15), mRY(sz > 0 ? car.steer * .4 : 0), mRX(car.spin), mS(.85, .85, .85))
+      : chain(base, mT(sx * 1.1, .48, sz * 1.35), mRY(sz > 0 ? car.steer * .4 : 0), mRX(car.spin)));
 }
 function drawBoat() {
   const bob = boat.hop > 0 ? 0 : Math.sin(T * 2.4) * .07;
@@ -2654,21 +3167,10 @@ function drawHeli() {
   draw3(tailBlade, chain(base, mT(.38, 2.9, -6.7), mRX(heli.rotor * 1.3)));
 }
 function drawStars() {
-  for (const s of stars) {
+  for (const s of here().stars) {
     const y = s.y + Math.sin(T * 3 + s.phase) * .5, sz = s.sky ? 3.6 : 2.6;
     draw3(starMesh, chain(mT(s.x, y, s.z), mRY(T * 2 + s.phase), mS(sz, sz, sz)));
   }
-}
-// the old dark patches, used only when there are no real shadows
-function drawBlobShadows() {
-  if (mode === 'car') dbox(car.x, .16, car.z, 2.6, .04, 4.6, car.a, SHADOW);
-  else if (mode === 'boat') { if (boat.hop > 0) dbox(boat.x, .22, boat.z, 2.4, .02, 5, boat.a, SHADOW); }
-  else if (mode === 'heli') {
-    const g = groundAt(heli.x, heli.z), s = Math.max(1, 4 - (heli.y - g) * .03);
-    dbox(heli.x, g + .16, heli.z, s, .04, s * 1.6, heli.a, SHADOW);
-  }
-  for (const s of stars) if (!s.sky) dbox(s.x, .16, s.z, 1.8, .03, 1.8, 0, SHADOW);
-  for (const m of machines) dbox(m.x, .16, m.z, 2 * m.r, .04, 2.4 * m.r, m.a, SHADOW);
 }
 // the rocket's bottom centre: parked on the pad, climbing over it, leaning into flight in space, or on the Moon
 function rocketBase() {
@@ -2678,30 +3180,15 @@ function rocketBase() {
   return chain(mT(station.x, MOUNTH, station.z), mRY(station.a));
 }
 function solidThings() {
-  if (worldAlpha > 0) draw3(world, ID, WHITE, worldAlpha);
+  const home = town === 'home';
+  if (worldAlpha > 0) draw3(townMesh, ID, WHITE, worldAlpha);
   if (mode === 'heli') drawHeli(); else if (mode === 'boat') drawBoat(); else if (mode === 'car') drawCar();
-  drawRocket();
+  if (mode === 'jet' || jet.town === town) drawJet();
+  if (home) drawRocket();
   if (worldAlpha < .5) return; // high up the rocket, the little things have already faded away
-  drawDucks();
-  drawAnimals();
+  if (home) { drawDucks(); drawAnimals(); }
   drawStars();
-  drawSite();
-}
-// render the sun's view of everything near `focus` into the shadow map; returns the sun's view-projection
-function shadowPass(focus) {
-  const lv = lookAt(SUN.map(v => v * 600), [0, 0, 0], [0, 1, 0]), texel = 2 * SH / SM;
-  const snap = v => Math.round(v / texel) * texel; // move in whole texels so shadow edges don't shimmer
-  const lx = snap(lv[0] * focus[0] + lv[4] * focus[1] + lv[8] * focus[2] + lv[12]);
-  const ly = snap(lv[1] * focus[0] + lv[5] * focus[1] + lv[9] * focus[2] + lv[13]);
-  const lvp = mul(ortho(lx - SH, lx + SH, ly - SH, ly + SH, 1, 900), lv);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFB); gl.viewport(0, 0, SM, SM);
-  gl.clear(gl.DEPTH_BUFFER_BIT);
-  use(SHADOWP); gl.uniformMatrix4fv(prog.uLVP, false, lvp);
-  gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT); // back faces only: lit faces never shadow themselves
-  solidThings();
-  gl.cullFace(gl.BACK);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  return lvp;
+  if (home) drawSite();
 }
 
 const SPACEHAZE = [.02, .022, .075]; // about the colour of space looking down, so the fading world blends into it
@@ -2730,6 +3217,11 @@ function camGoal() {
     return { eye: [ex, Math.max(v.y + 7, planetGround(ex, ez) + 3), ez], at: [v.x + dx * 4, v.y + 2, v.z + fz * 4] };
   }
   if (mode === 'crane') { const [hx, hz] = hookAt(v); return { eye: [v.x - dx * 6 + fz * 10, 30, v.z - fz * 6 - dx * 10], at: [hx, 6, hz] }; } // high behind the cab and a little to the side, looking down along the arm
+  if (mode === 'jet') { // behind and above the jet, a little further back once it flies
+    const low = jet.y < 3, back = low ? 20 : 26;
+    return { eye: [v.x - dx * back, Math.max(v.y + (low ? 6 : 8), scene === 'trip' ? 0 : groundAt(cam.x, cam.z, 2) + 3), v.z - fz * back],
+      at: [v.x + dx * 8, v.y + 2, v.z + fz * 8] };
+  }
   const h = mode === 'heli', mc = isMachine(mode), back = h ? 17 : mc ? 16 : 12;
   return { eye: [v.x - dx * back, Math.max(h ? v.y + 7 : mc ? 8 : 6, groundAt(cam.x, cam.z, 2) + 3), v.z - fz * back],
     at: [v.x + dx * 4, v.y + (h ? 2 : 1.5), v.z + fz * 4] };
@@ -2834,25 +3326,23 @@ function nearPlane() {
   return Math.max(.5, Math.min(rocket.y * .1, toRocket * .5));
 }
 function draw() {
-  const k = snapCam ? 1 : 1 - Math.exp(-dtDraw * 4), v = me(), goal = camGoal();
+  const k = snapCam ? 1 : 1 - Math.exp(-dtDraw * 4), goal = camGoal();
   snapCam = false;
   cam.x += (goal.eye[0] - cam.x) * k; cam.y += (goal.eye[1] - cam.y) * k; cam.z += (goal.eye[2] - cam.z) * k;
-  const r = mode === 'rocket', earth = scene === 'earth', h = mode === 'heli';
-  const up = earth ? (r ? smooth(150, 600, rocket.y) : 0) : 1; // how much the sky has turned into space
+  const r = mode === 'rocket', earth = scene === 'earth', trip = scene === 'trip', h = mode === 'heli', wide = h || mode === 'jet';
+  const up = earth ? (r ? smooth(150, 600, rocket.y) : 0) : trip ? 0 : 1; // how much the sky has turned into space
   // the flat world fades away into the haze, and the round Earth globe fades in where it was
   const gone = earth && r ? smooth(300, 600, rocket.y) : 0, fade = earth && r ? smooth(FADE_Y, SPACE_Y - 50, rocket.y) : 0;
   const haze = HAZE.map((c, i) => mix(c, SPACEHAZE[i], up));
-  if (!earth) { fog[0] = 1e5; fog[1] = 2e5; }
+  if (trip) { fog[0] = 300; fog[1] = 1100; }
+  else if (!earth) { fog[0] = 1e5; fog[1] = 2e5; }
   else if (r) { fog[0] = mix(200 + rocket.y * 1.2, 15, gone); fog[1] = mix(520 + rocket.y * 2.5, 40, gone); }
-  else { fog[0] += ((h ? 200 : 120) - fog[0]) * k; fog[1] += ((h ? 520 : 280) - fog[1]) * k; }
+  else { fog[0] += ((wide ? 200 : 120) - fog[0]) * k; fog[1] += ((wide ? 520 : 280) - fog[1]) * k; }
   const view = lookAt([cam.x, cam.y, cam.z], goal.at, [0, 1, 0]);
-  const far = earth ? (r ? 900 + rocket.y * 3 : 900) : scene === 'space' ? 6000 : 3000;
+  const far = earth ? (r ? 900 + rocket.y * 3 : 900) : scene === 'space' ? 6000 : 3000; // the trip over the clouds sees far too
   const near = nearPlane();
   const asp = cv.width / cv.height, vp = mul(persp(1.0, asp, near, far), view);
 
-  // high above the town the shadows are too small to see, so the graphics card gets a rest
-  const shadows = quality.shadows && earth && !(r && rocket.y > 40), dx = Math.sin(v.a), fz = Math.cos(v.a);
-  const lvp = shadows ? shadowPass([v.x + dx * 35, 0, v.z + fz * 35]) : ID;
   gl.viewport(0, 0, cv.width, cv.height);
   gl.depthMask(true); gl.clearColor(haze[0], haze[1], haze[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -2865,22 +3355,20 @@ function draw() {
   gl.enable(gl.DEPTH_TEST);
 
   use(MAIN);
-  gl.uniformMatrix4fv(prog.uVP, false, vp); gl.uniformMatrix4fv(prog.uLVP, false, lvp);
+  gl.uniformMatrix4fv(prog.uVP, false, vp);
   gl.uniform3f(prog.uCam, cam.x, cam.y, cam.z); gl.uniform3fv(prog.uSun, SUN); gl.uniform3fv(prog.uHaze, haze);
   gl.uniform2f(prog.uFog, fog[0], fog[1]); gl.uniform1f(prog.uTime, T);
-  gl.uniform1f(prog.uShadowOn, shadows ? 1 : 0); gl.uniform1f(prog.uTexel, 1 / SM);
-  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, shadowTex); gl.uniform1i(prog.uShadow, 0);
   gl.enable(gl.CULL_FACE);
   if (scene === 'space') drawSpaceThings();
   else if (scene === 'moon') drawMoonThings();
   else if (scene === 'planet') drawPlanetThings();
+  else if (trip) { draw3(cloudSea, ID); drawJet(); }
   else {
     worldAlpha = 1 - gone;
     if (gone > 0) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); }
     solidThings();
-    if (worldAlpha > 0) draw3(clouds, ID, WHITE, worldAlpha);
+    if (worldAlpha > 0) draw3(clouds, town === 'home' ? ID : mT(IX + WI / 2 - W / 2, 0, WI / 2 - W / 2), WHITE, worldAlpha); // the same clouds over the Tuscan town
     gl.disable(gl.BLEND); worldAlpha = 1;
-    if (!shadows) drawBlobShadows();
   }
   for (const c of confetti) dbox(c.x, c.y, c.z, .45, .45, .45, c.life * 5, c.col);
 
@@ -2915,13 +3403,18 @@ function draw() {
     const t = 1 - f.life / f.max, s = 1.6 + t * 2.4;
     draw3(ball, chain(mT(f.x, f.y, f.z), mRY(f.a), mS(s, .03, s * 1.4)), WHITE, .55 * (1 - t));
   }
+  for (const f of fx) if (f.trail) { // the jet's trails: long thin streaks that widen a little and fade
+    const t = 1 - f.life / f.max, s = .18 + t * .35;
+    draw3(ball, chain(mT(f.x, f.y, f.z), mRY(f.a), mS(s, s, 1.5)), WHITE, .6 * (1 - t));
+  }
   for (const f of fx) if (f.spray) {
     const t = 1 - f.life / f.max, s = .22 + t * .4;
     draw3(ball, chain(mT(f.x, f.y, f.z), mS(s, s, s)), WHITE, .7 * (1 - t * t));
   }
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // glows add light
   drawFlame();
-  if (earth) for (const s of stars) {
+  if (earth && Math.sin(T * 3) > 0) draw3(glowBall, chain(mT(...here().airport.light), mS(2.4, 2.4, 2.4)), [1, .15, .1], .9); // the tower's blinking light
+  if (earth) for (const s of here().stars) {
     const y = s.y + Math.sin(T * 3 + s.phase) * .5, g = (s.sky ? 6.5 : 4.8) * (1 + .06 * Math.sin(T * 5 + s.phase));
     draw3(glowBall, chain(mT(s.x, y, s.z), mS(g, g, g)), [1, .8, .25], .4);
   }
@@ -2937,7 +3430,7 @@ function draw() {
     const g = 22 * (1 + .06 * Math.sin(T * 5 + s.phase));
     draw3(glowBall, chain(mT(s.x, s.y + Math.sin(T * 3 + s.phase) * 1.5, s.z), mS(g, g, g)), [1, .8, .25], .45);
   }
-  for (const f of fx) if (!f.dust && !f.spray && !f.foam) {
+  for (const f of fx) if (!f.dust && !f.spray && !f.foam && !f.trail) {
     const s = .25 + .3 * Math.abs(Math.sin(f.life * 18));
     draw3(sparkMesh, chain(mT(f.x, f.y, f.z), mRY(f.life * 9), mS(s, s, s)), f.col, Math.min(1, f.life * 2));
   }
