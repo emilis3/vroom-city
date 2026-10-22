@@ -32,12 +32,12 @@ test('loads, draws frames and needs nothing from the network', async ({ page }) 
 test('town, collisions and stars are exactly where they were before', async ({ page }) => {
   await open(page);
   const now = await page.evaluate(() => ({ stars, solids: solids.slice(0, station.firstSolid), mountains: mountains.map(m => ({ x: m.x, z: m.z, r: m.r, h: m.h })), lake }));
-  // only the few countryside trees where the launch station and the construction site now stand are gone
+  // only the few countryside trees where the launch station, the construction site and the airport now stand are gone
   const kept = await page.evaluate(all => all.filter(s => {
     const x = (s.x0 + s.x1) / 2, z = (s.z0 + s.z1) / 2;
-    return !inStationArea(x, z, 3) && !inSiteArea(x, z, 3);
+    return !inStationArea(x, z, 3) && !inSiteArea(x, z, 3) && !inAirportArea(x, z, 3);
   }), LAYOUT.solids);
-  expect(LAYOUT.solids.length - kept.length).toBeLessThan(60);
+  expect(LAYOUT.solids.length - kept.length).toBeLessThan(90);
   expect(now.solids).toEqual(kept);
   expect(now.mountains).toEqual(LAYOUT.mountains);
   expect(now.lake).toEqual(LAYOUT.lake);
@@ -1399,5 +1399,244 @@ test('with the keyboard: each planet and its vehicle draw without errors, and a 
   const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
   await lose.evaluate(l => l.loseContext());
   await expect(page.locator('#start small')).toContainText('Graphics dropped out: rocket purple planet');
+  expect(problems).toEqual([]);
+});
+
+// ---------- Airport, private jet and the Tuscan town (#10) ----------
+
+test('airport: out in the countryside on a free side, with a paved road from a town road, and the jet parked on the apron', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const ap = airport, clash = [];
+    for (let lx = -AW; lx <= AW; lx += 4) for (let lz = -AD; lz <= AD; lz += 4) {
+      const [x, z] = ap.world(lx, lz);
+      if (wet(x, z, 2)) clash.push('water'); if (inStationArea(x, z)) clash.push('station'); if (inSiteArea(x, z)) clash.push('site');
+      if (mountains.some(m => Math.hypot(m.x - x, m.z - z) < m.r * 1.4)) clash.push('mountain');
+      if (townDist(x, z) < 10) clash.push('town');
+    }
+    // the road starts on a town road and is paved all the way to the apron
+    const [rx, rz] = ap.world(0, -AD - AROAD);
+    const [jx, jz] = ap.world(...PARK);
+    return { clash: [...new Set(clash)], roadStart: townDist(rx, rz), jet: [jet.phase, jet.town, Math.hypot(jet.x - jx, jet.z - jz) < 1],
+      jetSolid: jetBlocks(jx, jz, 1), pad: [ap.hx !== undefined, inAirportArea(ap.hx, ap.hz)] };
+  });
+  expect(r.clash).toEqual([]);
+  expect(r.roadStart).toBeLessThan(12);
+  expect(r.jet).toEqual(['parked', 'home', true]);
+  expect(r.jetSolid).toBe(true);
+  expect(r.pad).toEqual([true, true]);
+});
+
+test('jet: H next to it boards with a chime, W takes off, H in the air lands it by itself and the car gets out', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX');
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}, heard = [], real = dingDong, realSq = squeak;
+    dingDong = () => { heard.push('ding-dong'); real(); }; squeak = () => { heard.push('squeak'); realSq(); };
+    const badge = () => (refreshHud(), [document.getElementById('mode').textContent, Object.keys(HELP).find(k => HELP[k] === document.getElementById('help').textContent)]);
+    const ap = airport, [x, z] = ap.world(PARK[0] + 9, PARK[1]);
+    setMode('car'); Object.assign(car, { x, z, v: 0 }); refreshHud(); out.near = badge();
+    switchVehicle(); out.board = [mode, jet.phase, badge()];
+    switchVehicle(); out.outAgain = [mode, jet.phase]; switchVehicle();
+    keys.add('KeyW'); out.roll = step(30, () => jet.phase !== 'ground'); out.rolled = ap.local(jet.x, jet.z)[0] - RWY_START;
+    step(10, () => jet.phase === 'air'); keys.clear(); out.air = [jet.phase, badge()];
+    switchVehicle(); out.landing = [jet.phase, badge()];
+    switchVehicle(); keys.add('ArrowLeft'); keys.add('KeyW'); // H and steering do nothing while it lands itself
+    out.land = step(120, () => mode === 'car'); keys.clear();
+    out.after = [mode, jet.phase, Math.hypot(car.x - jet.x, car.z - jet.z) < 15];
+    dingDong = real; squeak = realSq; out.heard = heard;
+    return out;
+  }, STEP);
+  expect(r.near).toEqual(['H = ✈️', 'carJet']);
+  expect(r.board).toEqual(['jet', 'ground', ['H = 🚗', 'jetRunway']]);
+  expect(r.outAgain).toEqual(['car', 'parked']);
+  expect(r.rolled).toBeGreaterThan(70); expect(r.rolled).toBeLessThan(130);
+  expect(r.air).toEqual(['air', ['H = 🛬', 'jetAir']]);
+  expect(r.landing).toEqual(['land', ['✈️', 'jetAuto']]);
+  expect(r.land).toBeLessThan(120);
+  expect(r.after).toEqual(['car', 'parked', true]);
+  expect(r.heard).toEqual(['ding-dong', 'ding-dong', 'squeak']);
+  expect(problems).toEqual([]);
+});
+
+test('jet: lands itself on the runway from every side of town', async ({ page }) => {
+  test.setTimeout(150_000);
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP); started = true;
+    const ap = airport;
+    return [[0, 40, 0], [200, 50, 1.5], [-200, 30, 3], [0, 60, -1.6], [60, 20, Math.PI]].map(([dx, y, da]) => {
+      setMode('jet');
+      Object.assign(jet, { x: ap.x + dx, y, z: ap.z - 150 * ap.oz, a: ap.run + da, v: 35, vy: 0, phase: 'air', town: 'home' });
+      switchVehicle();
+      let td = null, low = Infinity;
+      const secs = step(150, () => {
+        if (jet.leg === 'final' && jet.y > 0) low = Math.min(low, jet.y - groundAt(jet.x, jet.z, 0));
+        if (jet.leg === 'roll' && !td) { const [lx, lz] = ap.local(jet.x, jet.z); td = [lx, lz - RWYZ]; }
+        return mode === 'car';
+      });
+      return { secs, onRunway: td !== null && Math.abs(td[0]) < RWY && Math.abs(td[1]) < 3, low: low > 0 };
+    });
+  }, STEP);
+  for (const c of r) expect(c).toEqual({ secs: expect.any(Number), onRunway: true, low: true });
+  for (const c of r) expect(c.secs).toBeLessThan(90);
+});
+
+test('jet: stays 15 to 65 m up, lifts itself over mountains, and leaves wing trails that fade', async ({ page }) => {
+  test.setTimeout(150_000);
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}; started = true;
+    setMode('jet');
+    // diving and climbing over town
+    Object.assign(jet, { x: W / 2, y: 40, z: W / 2, a: 0, v: 35, vy: 0, phase: 'air', town: 'home' });
+    keys.add('KeyS'); let low = Infinity; step(6, () => { low = Math.min(low, jet.y - groundAt(jet.x, jet.z, 0)); }); keys.clear();
+    keys.add('KeyW'); step(12); keys.clear(); out.high = jet.y;
+    out.low = low;
+    // straight at the tallest mountain, pushing down
+    const m = [...mountains].sort((a, b) => b.h - a.h)[0];
+    Object.assign(jet, { x: m.x, y: 20, z: m.z - m.r * 2 - 60, a: 0, v: 35, vy: 0, phase: 'air' });
+    keys.add('KeyS'); let clear = Infinity;
+    step(8, () => { clear = Math.min(clear, jet.y - groundAt(jet.x, jet.z, 0)); }); keys.clear();
+    out.overMountain = clear; out.speed = jet.v;
+    out.trails = fx.filter(f => f.trail).length;
+    setMode('car'); step(4); out.trailsLater = fx.filter(f => f.trail).length;
+    return out;
+  }, STEP);
+  expect(r.low).toBeGreaterThan(12);
+  expect(r.high).toBeLessThanOrEqual(65);
+  expect(r.overMountain).toBeGreaterThan(5);
+  expect(r.speed).toBeCloseTo(35, 0);
+  expect(r.trails).toBeGreaterThan(20);
+  expect(r.trailsLater).toBe(0);
+});
+
+test('trip: past the edge the jet flies over the clouds to the Tuscan town, and back home the same way', async ({ page }) => {
+  test.setTimeout(150_000);
+  const problems = await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}; started = true;
+    const fly = () => {
+      const t = here(); setMode('jet');
+      Object.assign(jet, { x: (t.x0 + t.x1) / 2, y: 40, z: t.z0 + 30, a: Math.PI, v: 35, vy: 0, phase: 'air', town });
+      step(10, () => scene === 'trip');
+      const during = [scene, jet.phase, document.getElementById('mode').textContent];
+      switchVehicle(); // does nothing on the trip
+      const secs = step(20, () => scene !== 'trip');
+      const ap = here().airport, arrived = [town, scene, jet.phase, Math.hypot(jet.x - ap.x, jet.z - ap.z) < 400];
+      switchVehicle(); step(120, () => mode === 'car');
+      return { during, secs, arrived, landed: [mode, jet.town, jet.phase] };
+    };
+    out.there = fly(); out.back = fly();
+    return out;
+  }, STEP);
+  expect(r.there.during).toEqual(['trip', 'trip', '✈️']);
+  expect(r.there.secs).toBeGreaterThan(5); expect(r.there.secs).toBeLessThan(7);
+  expect(r.there.arrived).toEqual(['italy', 'earth', 'arrive', true]);
+  expect(r.there.landed).toEqual(['car', 'italy', 'parked']);
+  expect(r.back.arrived).toEqual(['home', 'earth', 'arrive', true]);
+  expect(r.back.landed).toEqual(['car', 'home', 'parked']);
+  expect(await glError(page)).toBe(0);
+  expect(problems).toEqual([]);
+});
+
+test('Tuscan town: piazza, church, bell tower, a lake like home, a river with bridges, trees, an airfield and 26 stars, the same every time', async ({ page }) => {
+  test.setTimeout(150_000);
+  await open(page);
+  const once = () => page.evaluate(() => {
+    if (italy === null) buildItaly();
+    const it = italy, ap = it.airport;
+    return { lake: it.lake.area / lake.area, landmarks: Object.keys(it.landmarks), bridges: it.bridges.length, trees: it.trees,
+      hills: it.hills.length, mountains: it.mountains.length, airport: ap !== null && ap.hx !== undefined,
+      stars: [it.stars.filter(s => !s.sky && !s.water).length, it.stars.filter(s => s.sky).length, it.stars.filter(s => s.water).length],
+      riverInTown: it.river.some(p => p.x > IX && p.x < IX + WI && p.z > 0 && p.z < WI), layout: JSON.stringify([it.stars, it.bridges, ap.x, ap.z]),
+      noRocket: !inStationArea(ap.x, ap.z) };
+  });
+  const a = await once();
+  expect(Math.abs(a.lake - 1)).toBeLessThan(.15);
+  expect(a.landmarks).toEqual(['fountain', 'church', 'tower']);
+  expect(a.bridges).toBeGreaterThan(2);
+  expect(a.trees.cypress).toBeGreaterThan(50); expect(a.trees.poplar).toBeGreaterThan(5); expect(a.trees.olive).toBeGreaterThan(20);
+  expect(a.hills).toBeGreaterThan(5); expect(a.mountains).toBeGreaterThan(3);
+  expect(a.airport).toBe(true);
+  expect(a.stars).toEqual([10, 8, 8]);
+  expect(a.riverInTown).toBe(true);
+  await page.reload(); await page.waitForFunction(() => T > 0.3);
+  expect((await once()).layout).toBe(a.layout);
+});
+
+test('Tuscan town: the Italian car and its horn, bridges over the river, the boat under them, stars, the helicopter pad and the edge', async ({ page }) => {
+  test.setTimeout(150_000);
+  const problems = await open(page);
+  await page.keyboard.press('KeyX');
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}, notes = [], realTone = tone;
+    const horns = () => { notes.length = 0; tone = (f, ...a) => { notes.push(f); realTone(f, ...a); }; lastHorn = -9; horn(); tone = realTone; return [...new Set(notes)].sort(); };
+    out.homeHorn = horns();
+    goTo('italy'); out.italyHorn = horns();
+    const b = italy.bridges[2];
+    setMode('car'); Object.assign(car, { x: b.x - 30, z: b.z, a: Math.PI / 2, v: 0 });
+    keys.add('ArrowUp'); let top = 0; const modes = new Set();
+    step(10, () => { top = Math.max(top, car.y); modes.add(mode); return car.x > b.x + 30; }); keys.clear();
+    out.bridge = [top, [...modes]];
+    setMode('boat'); Object.assign(boat, { x: b.x, z: b.z - 25, a: 0, v: 0, hop: 0, vy: 0 });
+    keys.add('ArrowUp'); modes.clear(); step(10, () => { modes.add(mode); return boat.z > b.z + 20; }); keys.clear();
+    out.under = [[...modes], boat.z > b.z + 20];
+    const s = italy.stars.find(s => !s.sky && !s.water), before = score;
+    setMode('car'); Object.assign(car, { x: s.x, z: s.z, v: 0 }); step(.2); out.star = score - before;
+    out.pads = ['home', 'italy'].map(tn => { goTo(tn); const ap = here().airport; setMode('heli'); Object.assign(heli, { x: ap.hx, y: 5, z: ap.hz, v: 0 }); switchVehicle(); return [mode, Math.hypot(car.x - ap.hx, car.z - ap.hz) < 1]; });
+    goTo('italy');
+    setMode('heli'); Object.assign(heli, { x: italy.x1 - 5, y: 20, z: 100, a: Math.PI / 2, v: 0, lift: 0 }); keys.add('ArrowUp'); step(4); keys.clear();
+    setMode('car'); Object.assign(car, { x: IX + 100, z: italy.z0 + 10, a: Math.PI, v: 0 }); keys.add('ArrowUp'); step(4); keys.clear();
+    out.edge = [heli.x <= italy.x1, car.z >= italy.z0, town];
+    return out;
+  }, STEP);
+  expect(r.italyHorn).toEqual([587, 740]);
+  expect(r.homeHorn).not.toEqual(r.italyHorn);
+  expect(r.bridge[0]).toBeCloseTo(2.6, 1);
+  expect(r.bridge[1]).toEqual(['car']);
+  expect(r.under).toEqual([['boat'], true]);
+  expect(r.star).toBe(1);
+  expect(r.pads).toEqual([['car', true], ['car', true]]);
+  expect(r.edge).toEqual([true, true, 'italy']);
+  // the Italian car is drawn in Italy and the town draws without errors
+  await page.waitForFunction(() => T > 2);
+  expect(await glError(page)).toBe(0);
+  expect(problems).toEqual([]);
+});
+
+test('with the keyboard: board the jet, take off, fly to Italy, and everything draws without errors', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX');
+  await page.evaluate(() => { const [x, z] = airport.world(PARK[0] + 9, PARK[1]); Object.assign(car, { x, z, v: 0 }); });
+  await page.keyboard.press('KeyH');
+  await page.waitForFunction(() => mode === 'jet', null, { timeout: 10_000 });
+  await page.keyboard.down('KeyW');
+  await page.waitForFunction(() => jet.v > 5, null, { timeout: 40_000 });
+  await page.keyboard.up('KeyW');
+  // CI's software renderer is slow: skip the rest of the run-up and fly to just inside the edge
+  await page.evaluate(() => { const t = here(); Object.assign(jet, { x: W / 2, y: 40, z: t.z0 + 5, a: Math.PI, v: 35, phase: 'air' }); });
+  await page.waitForFunction(() => scene === 'trip', null, { timeout: 40_000 });
+  const shot = await page.locator('canvas').screenshot();
+  expect(shot.length).toBeGreaterThan(5_000);
+  await page.evaluate(() => { trip.t = TRIP_TIME - .05; });
+  await page.waitForFunction(() => town === 'italy' && scene === 'earth', null, { timeout: 60_000 });
+  await page.keyboard.press('KeyH');
+  await page.waitForFunction(() => jet.phase === 'land', null, { timeout: 10_000 });
+  expect(await glError(page)).toBe(0);
+  expect(problems).toEqual([]);
+});
+
+test('a drop-out in the Tuscan town names it', async ({ page }) => {
+  const problems = await open(page);
+  await page.keyboard.press('KeyX');
+  await page.evaluate(() => goTo('italy'));
+  const lose = await page.evaluateHandle(() => gl.getExtension('WEBGL_lose_context'));
+  await lose.evaluate(l => l.loseContext());
+  await expect(page.locator('#start small')).toContainText('Graphics dropped out: car italy');
   expect(problems).toEqual([]);
 });
