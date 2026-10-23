@@ -49,12 +49,11 @@ After landing, add `in staging` to the issue; the `post-prod-sync` Action remove
 - Env vars: document names only, never values; scope staging and production separately.
 
 ## 7. Before reporting it on staging
-Run lint, typecheck, unit tests (also under a second `TZ`), build and e2e; confirm no secrets were committed. Then report once, in the project thread: the PR link, the checks run with results, what you couldn't check, and what the owner must check by hand.
+Run lint, typecheck, unit tests, build and e2e; confirm no secrets were committed. Then report once, in the project thread: the PR link, the checks run with results, what you couldn't check, and what the owner must check by hand.
 
 ## 8. Testing
 - Pin Node 24 everywhere. CI runs all checks on push/PR to `staging` and `main`.
 - All pure logic gets unit tests; worked examples in the issue become tests. Tests never hit live services.
-- Time zone: date/time behaviour must be stated in the issue and tested under more than one `TZ`, including DST days.
 - Don't add anything the issue doesn't ask for.
 
 ## 9. Secrets and server data
