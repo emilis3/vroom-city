@@ -3613,8 +3613,11 @@ function draw() {
     setFog(fog[0], fog[1]);
   }
   if (scene === 'space') draw3(earthClouds, globeAt(0, 0, 0, ER * 1.03, T * .035), WHITE, .7);
+  if (scene === 'moon' || scene === 'planet') { // the Earth in the sky has its clouds too
+    const e = skyOf(scene === 'moon' ? 'moon' : planetIx).find(b => b.kind === 'earth');
+    draw3(earthClouds, globeAt(cam.x + e.x, cam.y + e.y, cam.z + e.z, e.r * 1.03, T * .035), WHITE, .85);
+  }
   if (scene === 'moon') {
-    draw3(earthClouds, globeAt(-320, 260, -760, 80 * 1.03, T * .035), WHITE, .85);
     tracks.forEach((t, i) => { // the oldest marks fade away
       const c = Math.cos(t.a), sn = Math.sin(t.a), al = .6 * Math.min(1, (i + 1) / 60);
       for (const sx of [-1.2, 1.2]) draw3(cube, chain(mT(t.x + sx * c, .06, t.z - sx * sn), mRY(t.a), mS(.6, .02, 1)), hex(0x4a4a4a), al);
