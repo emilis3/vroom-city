@@ -141,7 +141,7 @@ void main() {
   c = mix(c, vec3(0.01, 0.015, 0.05) + vec3(0.03, 0.02, 0.08) * (1.0 - abs(d.y)), uSpace);
   c += vec3(step(0.996, h) * tw * smoothstep(0.3, 1.0, uSpace));
   float s = max(dot(d, uSun), 0.0);
-  c += vec3(1.0, 0.95, 0.75) * (smoothstep(0.9990, 0.9994, s) * 0.7 + pow(s, 80.0) * 0.3);
+  c += vec3(1.0, 0.95, 0.75) * (smoothstep(0.9990, 0.9994, s) * 0.7 + pow(s, 80.0) * 0.3) * (1.0 - uSpace); // out in space a real Sun is drawn instead
   gl_FragColor = vec4(c, 1.0);
 }`;
 function shader(type, src) {
@@ -1417,6 +1417,40 @@ const planets = [
 const STATION_R = ER + 90;
 function stationPos(t = T) { const a = t * .06; return { x: Math.cos(a) * STATION_R, y: Math.sin(a) * 60, z: Math.sin(a) * STATION_R, a }; }
 const bodies = () => [{ ...stationPos(), r: 14 }]; // the planets are landed on, not bumped off
+
+// ---------- The sky seen from the Moon or a planet: the Earth, the Moon, the planets and the Sun ----------
+// Each one keeps the compass bearing it really has in space, but sits in the sky (never below the ground),
+// a bit bigger than true if it's far, and beyond the ringed planet's ring (out to 1400) so it is never inside it.
+const SKY_D = 2200, SUN_SKY_D = 2300, SKY_MIN = .14, SKY_MAX = .42, SKY_SMALL = .061, SKY_BIG = .122, SUN_ANG = .09, SUN_ELEV = .18; // angles in radians
+// The Sun keeps the light's compass bearing but sits low enough in the sky (about 10 degrees up) to be seen past the rocket.
+const sunBearing = () => Math.atan2(SUN[0], SUN[2]);
+function skyBodies(where) { // where: 'moon' or a planet's index
+  const from = where === 'moon' ? MOON : planets[where];
+  const all = [{ kind: 'earth', x: 0, y: 0, z: 0, r: ER, spin: .02 }, { kind: 'moon', ...MOON, spin: .01 },
+    ...planets.map((p, i) => ({ kind: 'planet', i, ...p, spin: .04 * (i + 1) }))];
+  const dir = (b, e) => [Math.sin(b) * Math.cos(e), Math.sin(e), Math.cos(b) * Math.cos(e)];
+  const sun = { kind: 'sun', d: SUN_SKY_D, ang: SUN_ANG, bearing: sunBearing(), elev: SUN_ELEV };
+  const out = [];
+  for (const b of all) {
+    if (b === all[1] ? where === 'moon' : b.kind === 'planet' && b.i === where) continue; // not the one you stand on
+    const dx = b.x - from.x, dy = b.y - from.y, dz = b.z - from.z, dist = Math.hypot(dx, dy, dz);
+    const real = Math.asin(b.r / dist), elev = Math.asin(dy / dist);
+    const s = { ...b, d: SKY_D, bearing: Math.atan2(dx, dz), realElev: elev, ang: Math.min(SKY_BIG, Math.max(SKY_SMALL, real)),
+      elev: Math.min(SKY_MAX, Math.max(SKY_MIN, elev)) };
+    // two in nearly the same spot: lift this one until it's clear of the others and the Sun
+    const clash = () => [sun, ...out].some(o => {
+      const a = dir(o.bearing, o.elev), c = dir(s.bearing, s.elev);
+      return Math.acos(Math.min(1, a[0] * c[0] + a[1] * c[1] + a[2] * c[2])) < (o.ang + s.ang) * 1.25;
+    });
+    for (let k = 0; k < 60 && clash(); k++) { if (s.elev + .03 <= SKY_MAX) s.elev += .03; else { s.elev = Math.min(SKY_MAX, Math.max(SKY_MIN, s.realElev)); s.bearing += .05; } } // up first, then a step sideways
+    out.push(s);
+  }
+  for (const s of [...out, sun]) {
+    const [x, y, z] = dir(s.bearing, s.elev);
+    Object.assign(s, { x: x * s.d, y: y * s.d, z: z * s.d, r: Math.tan(s.ang) * s.d });
+  }
+  return [...out, sun];
+}
 const spaceStars = [];
 function spaceStar() { // only the rocket can catch these: anywhere in space, clear of the planets and the Moon
   for (;;) {
@@ -3416,7 +3450,35 @@ function drawBuggy() {
     draw3(carWheel, chain(base, mT(sx * 1.2, .55, sz * 1.25), mRY(sz > 0 ? buggy.steer * .4 : 0), mRX(buggy.spin), mS(1.15, 1.15, 1.15)));
 }
 const globeAt = (x, y, z, r, spin) => chain(mT(x, y, z), mRY(spin), mS(2 * r, 2 * r, 2 * r));
+// the Sun: far away in the light's direction, so it always looks the same however far you fly
+const SUN_D = 5000, SUN_R = 400, SUN_COL = [1, .78, .3];
+const sunMesh = build(o => o(ICO2, 0, 0, 0, 1, 1, 1, hex(0xffd54f), 3));
+const sunAt = (d, r) => { const b = sunBearing(), c = Math.cos(SUN_ELEV) * d; return { x: cam.x + Math.sin(b) * c, y: cam.y + Math.sin(SUN_ELEV) * d, z: cam.z + Math.cos(b) * c, r }; };
+const skyCache = {};
+const skyOf = where => skyCache[where] ||= skyBodies(where);
+function drawSky(where) { // the sky hangs round the camera, like faraway things do
+  for (const s of skyOf(where)) {
+    const x = cam.x + s.x, y = cam.y + s.y, z = cam.z + s.z;
+    if (s.kind === 'sun') draw3(sunMesh, globeAt(x, y, z, s.r, 0));
+    else if (s.kind === 'earth') draw3(earthMesh, globeAt(x, y, z, s.r, T * s.spin));
+    else if (s.kind === 'moon') draw3(moonMesh, globeAt(x, y, z, s.r, T * s.spin));
+    else {
+      draw3(planetMeshes[s.i], globeAt(x, y, z, s.r, T * s.spin));
+      if (s.ring) draw3(ringMesh, chain(mT(x, y, z), mRX(.35), mS(s.r * 2.2, s.r * 2.2, s.r * 2.2)));
+    }
+  }
+}
+function drawSunGlow() { // a soft glow round the Sun, in space and in the Moon's and planets' skies
+  const s = scene === 'space' ? sunAt(SUN_D, SUN_R) : scene === 'moon' || scene === 'planet' ? (() => {
+    const k = skyOf(scene === 'moon' ? 'moon' : planetIx).find(b => b.kind === 'sun');
+    return { x: cam.x + k.x, y: cam.y + k.y, z: cam.z + k.z, r: k.r };
+  })() : null;
+  if (!s) return;
+  draw3(glowBall, chain(mT(s.x, s.y, s.z), mS(s.r * 3.4, s.r * 3.4, s.r * 3.4)), SUN_COL, .45);
+}
 function drawSpaceThings() {
+  const sun = sunAt(SUN_D, SUN_R);
+  draw3(sunMesh, globeAt(sun.x, sun.y, sun.z, sun.r, 0));
   draw3(earthMesh, globeAt(0, 0, 0, ER, T * .02));
   draw3(moonMesh, globeAt(MOON.x, MOON.y, MOON.z, MOON.r, T * .01));
   planets.forEach((pl, i) => {
@@ -3431,7 +3493,7 @@ function drawSpaceThings() {
 }
 function drawMoonThings() {
   draw3(moonWorld, ID);
-  draw3(earthMesh, globeAt(-320, 260, -760, 80, T * .02)); // the Earth hangs in the black sky
+  drawSky('moon');
   for (const s of moonStars) if (!s.wait) {
     const y = s.y + Math.sin(T * 3 + s.phase) * .5, sz = s.ramp < 0 ? 2.6 : 3.6;
     draw3(starMesh, chain(mT(s.x, y, s.z), mRY(T * 2 + s.phase), mS(sz, sz, sz)));
@@ -3444,7 +3506,7 @@ function drawMoonThings() {
 function drawPlanetThings() {
   const i = planetIx, G = PLANET_GROUND[i];
   draw3(planetWorlds[i], ID);
-  draw3(earthMesh, globeAt(-320, 260, -760, 80, T * .02)); // the Earth hangs in the black sky
+  drawSky(i);
   if (i === 1) draw3(ringMesh, chain(mT(0, -150, 0), mRX(.45), mS(1400, 1400, 1400))); // the planet's own ring arcs overhead
   if (i === 0) for (const t of towers) {
     if (t.state === 'up') {
@@ -3580,6 +3642,7 @@ function draw() {
     draw3(ball, chain(mT(f.x, f.y, f.z), mS(s, s, s)), WHITE, .7 * (1 - t * t));
   }
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // glows add light
+  drawSunGlow();
   drawFlame(); drawReentry();
   for (const f of fx) if (f.flame && !f.fire) { // turbo flames: glowing puffs that shrink as they fade
     const t = 1 - f.life / f.max, s = .9 - t * .6;

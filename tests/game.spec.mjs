@@ -543,6 +543,64 @@ test('space: stars only the rocket can catch, soft bumps, the edge, and the Moon
     buggy: ['moon', 'H = 🚀', 0] });
 });
 
+test('sky from the Moon and each planet: the rest of space and the Sun, in the sky and beyond the ring (#29)', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(() => {
+    const out = {}, deg = 180 / Math.PI;
+    const angle = (a, b) => { const d = Math.abs(a - b) % (2 * Math.PI); return Math.min(d, 2 * Math.PI - d); };
+    const unit = s => { const l = Math.hypot(s.x, s.y, s.z); return [s.x / l, s.y / l, s.z / l]; };
+    for (const where of ['moon', 0, 1, 2]) {
+      const sky = skyBodies(where), from = where === 'moon' ? MOON : planets[where];
+      const others = sky.filter(s => s.kind !== 'sun');
+      out[where] = {
+        kinds: sky.map(s => s.kind + (s.kind === 'planet' ? s.i : '')).sort(),
+        // each keeps its real compass bearing (give or take a small nudge apart)
+        bearings: others.every(s => {
+          const real = s.kind === 'earth' ? { x: 0, z: 0 } : s.kind === 'moon' ? MOON : planets[s.i];
+          return angle(s.bearing, Math.atan2(real.x - from.x, real.z - from.z)) < .5;
+        }),
+        above: sky.every(s => s.y > 0 && Math.asin(s.y / Math.hypot(s.x, s.y, s.z)) * deg > 5),
+        // beyond the ring (out to 1400) even with the camera 400 away from the middle, inside the view limit (3000)
+        far: sky.every(s => Math.hypot(s.x, s.y, s.z) - 400 > 1400 && Math.hypot(s.x, s.y, s.z) + s.r + 400 < 3000),
+        apart: sky.every((a, i) => sky.every((b, j) => {
+          if (i >= j) return true;
+          const u = unit(a), v = unit(b);
+          return Math.acos(Math.min(1, u[0] * v[0] + u[1] * v[1] + u[2] * v[2])) > a.ang + b.ang;
+        })),
+        sun: angle(sky.find(s => s.kind === 'sun').bearing, Math.atan2(SUN[0], SUN[2])) < 1e-9,
+        ring: others.filter(s => s.ring).length,
+      };
+    }
+    out.same = JSON.stringify(skyBodies(1)) === JSON.stringify(skyBodies(1)); // the same sky every visit
+    return out;
+  });
+  const want = (kinds, ring) => ({ kinds, bearings: true, above: true, far: true, apart: true, sun: true, ring });
+  expect(r).toEqual({
+    moon: want(['earth', 'planet0', 'planet1', 'planet2', 'sun'], 1),
+    0: want(['earth', 'moon', 'planet1', 'planet2', 'sun'], 1),
+    1: want(['earth', 'moon', 'planet0', 'planet2', 'sun'], 0),
+    2: want(['earth', 'moon', 'planet0', 'planet1', 'sun'], 1),
+    same: true,
+  });
+});
+
+test('the Sun shows in space and on the Moon and the planets, out of the rocket\'s reach', async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  const r = await page.evaluate(() => {
+    setMode('rocket'); enterSpace();
+    const s = sunAt(SUN_D, SUN_R), d = Math.hypot(s.x - cam.x, s.y - cam.y, s.z - cam.z);
+    return { far: d > SB * 2, inView: d + s.r < 6000 };
+  });
+  expect(r).toEqual({ far: true, inView: true });
+  for (const where of ['moon', 1]) {
+    await page.evaluate(w => { setMode('rocket'); if (w === 'moon') landOnMoon(); else landOnPlanet(w); }, where);
+    await page.waitForFunction(() => T > 0, null, { polling: 100 });
+    expect(await glError(page)).toBe(0);
+  }
+  expect(problems).toEqual([]);
+});
+
 test('the moon buggy bounces over crater rims, leaves tracks, and H flies home to the pad', async ({ page }) => {
   await open(page);
   const r = await page.evaluate(STEP => {
