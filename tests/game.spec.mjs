@@ -505,7 +505,7 @@ test('countdown, then holding up reaches space in about 15 s; letting go hovers'
     out.toSpace = step(30, () => scene === 'space');
     out.space = [scene, Math.round(rocket.y), document.getElementById('mode').textContent];
     // back on the pad, climb halfway and let go: it hovers
-    reenter(); Object.assign(rocket, { y: 0, vy: 0 }); step(7, () => rocket.y > 300);
+    reenter(); Object.assign(rocket, { y: 0, vy: 0, auto: false }); step(7, () => rocket.y > 300);
     keys.clear(); step(3); const y = rocket.y; step(3);
     out.hover = [Math.abs(rocket.vy) < .5, rocket.y >= y - .5, rocket.y > 250];
     out.inFlightH = (switchVehicle(), mode);
@@ -561,9 +561,8 @@ test('the moon buggy bounces over crater rims, leaves tracks, and H flies home t
     out.space = [scene, tracks.length];
     Object.assign(rocket, { x: 0, y: ER + GAP - 50, z: 0 }); step(1 / 60);
     out.reentry = [scene, rocket.x === station.x && rocket.z === station.z, rocket.y > 700];
-    keys.add('KeyS'); out.landTime = step(40, () => rocket.y === 0); keys.clear();
-    out.pad = [landed(), document.getElementById('mode').textContent];
-    switchVehicle(); out.car = [mode, inStation(car.x, car.z)];
+    out.landTime = step(40, () => mode === 'car'); // it lands by itself and the car drives out
+    out.car = [mode, inStation(car.x, car.z)];
     return out;
   }, STEP);
   expect(r.bounce).toBeGreaterThan(1);
@@ -573,8 +572,56 @@ test('the moon buggy bounces over crater rims, leaves tracks, and H flies home t
   expect(r.space).toEqual(['space', 0]);
   expect(r.reentry).toEqual(['earth', true, true]);
   expect(r.landTime).toBeLessThan(40);
-  expect(r.pad).toEqual([true, 'H = 🚗']);
   expect(r.car).toEqual(['car', true]);
+});
+
+// ---------- Coming home: the rocket lands on the pad by itself (#31) ----------
+test('back from space: fiery re-entry, a calm landing in about 13 s with every key locked, then the car drives out', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {}, flames = () => fx.filter(f => f.flame).length;
+    setMode('rocket'); enterSpace();
+    Object.assign(rocket, { x: 0, y: ER + GAP - 50, z: 0 }); step(1 / 60);
+    const a = rocket.a;
+    out.start = [scene, rocket.auto, rocket.y > 700, document.getElementById('help').textContent, document.getElementById('mode').textContent];
+    keys.add('KeyW'); keys.add('ArrowUp'); keys.add('ArrowLeft'); // a kid mashing keys changes nothing
+    step(1); out.fire = [flames() > 5, rocket.thrust < .1];
+    let y = rocket.y, falling = true;
+    for (let i = 0; i < 5; i++) { switchVehicle(); step(.5); falling = falling && rocket.y < y && mode === 'rocket'; y = rocket.y; }
+    out.locked = [falling, rocket.a === a];
+    step(1); out.fireGone = flames(); // 4.5 s in, the fire is over
+    const t = 4.5 + step(20, () => mode === 'car');
+    keys.clear();
+    out.time = t;
+    out.car = [mode, scene, inStation(car.x, car.z), rocket.y, rocket.auto];
+    switchVehicle(); out.again = [mode, rocket.y, rocket.count > 0, document.getElementById('help').textContent];
+    return out;
+  }, STEP);
+  expect(r.start).toEqual(['earth', true, true, 'Sit back and enjoy the ride home! · M = sound', '🚀']);
+  expect(r.fire).toEqual([true, true]);
+  expect(r.locked).toEqual([true, true]);
+  expect(r.fireGone).toBe(0);
+  expect(r.time).toBeGreaterThan(12);
+  expect(r.time).toBeLessThan(15);
+  expect(r.car).toEqual(['car', 'earth', true, 0, false]);
+  expect(r.again).toEqual(['rocket', 0, true, 'Hold W, Space or ↑ = blast off · S or ↓ = go down · H = car · M = sound']);
+});
+
+test('coming home the camera looks down at the town, and is back to normal at touchdown', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    const tilt = () => { const g = camGoal(); return (g.eye[1] - g.at[1]) / Math.hypot(g.eye[0] - g.at[0], g.eye[2] - g.at[2]); }; // how steeply it looks down
+    setMode('rocket'); reenter(); step(4);
+    const y = rocket.y; out.high = y > 200; out.home = tilt();
+    Object.assign(rocket, { auto: false }); out.hover = tilt(); // a normal hover at the same height
+    Object.assign(rocket, { auto: true, y: .5 }); const near = tilt(); // just above the pad
+    rocket.auto = false; out.low = Math.abs(near - tilt());
+    return out;
+  }, STEP);
+  expect(r.high).toBe(true);
+  expect(r.home).toBeGreaterThan(r.hover * 1.5);
+  expect(r.low).toBeLessThan(.01);
 });
 
 // ---------- Moon stars and jump ramps (#16) ----------

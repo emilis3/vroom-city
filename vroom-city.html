@@ -1369,7 +1369,7 @@ const heli = { x: 0, y: 0, z: 0, a: 0, v: 0, rotor: 0, lift: 0 };
 const boat = { x: 0, y: .2, z: 0, a: 0, v: 0, steer: 0, hop: 0, vy: 0, onRamp: false, big: false }; // hop = height above the water, big = off a big ramp
 // count = countdown seconds left, thrust = how hard the engines push (0 to 1), auto = landing by itself
 // lift = the time T the rocket last left the ground, or null
-const rocket = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, pitch: 0, count: 0, thrust: 0, auto: false, lift: null };
+const rocket = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, pitch: 0, count: 0, thrust: 0, auto: false, lift: null, home: 0 };
 const buggy = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, steer: 0, spin: 0, g: 0, up: 0, peak: 0 }; // up = how fast a ramp is lifting it, peak = highest point of this jump
 // phase: parked, ground (on the runway), climb, air, land (by itself: leg turn, final, roll, taxi), trip or arrive; town: where it is
 const jet = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, bank: 0, pitch: 0, phase: 'parked', town: 'home', leg: '', wp: 0, t: 0 };
@@ -1666,6 +1666,7 @@ const HELP = {
   carStation: 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = rocket · M = sound',
   heliStation: 'Arrows = fly · W or Space = go up · S or Shift = go down · O = turbo! · H = rocket · M = sound',
   rocketPad: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · H = car · M = sound',
+  rocketHome: 'Sit back and enjoy the ride home! · M = sound',
   rocketMoon: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · M = sound',
   rocketSpace: 'Arrows = fly · W or Space = go up · S or Shift = go down · M = sound',
   buggy: 'Arrows or WASD = drive the buggy · O = turbo! · H = rocket · M = sound',
@@ -1691,7 +1692,7 @@ function refreshHud() {
     rocket: landed() ? 'H = 🚗' : '🚀', digger: 'H = 🚗', truck: 'H = 🚗', dozer: 'H = 🚗', crane: 'H = 🚗' }[mode];
   const help = nm ? 'carSite' : atStation ? mode + 'Station' : nj ? 'carJet' :
     mode === 'jet' ? (jet.phase === 'ground' ? 'jetRunway' : (jet.phase === 'air' || jet.phase === 'arrive') ? 'jetAir' : 'jetAuto') : mode !== 'rocket' ? mode :
-    scene === 'space' ? 'rocketSpace' : scene === 'moon' || scene === 'planet' ? 'rocketMoon' : 'rocketPad';
+    scene === 'space' ? 'rocketSpace' : scene === 'moon' || scene === 'planet' ? 'rocketMoon' : rocket.auto ? 'rocketHome' : 'rocketPad';
   const b = document.getElementById('mode'), h = document.getElementById('help');
   if (b.textContent !== badge) b.textContent = badge;
   if (h.textContent !== HELP[help]) h.textContent = HELP[help];
@@ -1730,9 +1731,10 @@ function enterSpace() {
   scene = 'space'; clearFx();
   Object.assign(rocket, { x: 0, y: ER + GAP, z: 0, v: 0, vy: 0, pitch: 0 });
 }
-function reenter() { // from anywhere in space, back into the sky above the launch pad
+function reenter() { // from anywhere in space, back into the sky above the launch pad, and down onto it by itself
   scene = 'earth'; clearFx(); whoosh(false);
-  Object.assign(rocket, { x: station.x, y: SPACE_Y - 10, z: station.z, v: 0, vy: 0, pitch: 0 });
+  Object.assign(rocket, { x: station.x, y: SPACE_Y - 10, z: station.z, a: station.a + Math.PI, // facing town, as at launch: the tower never hides the view
+    v: 0, vy: 0, pitch: 0, thrust: 0, auto: true, home: 0 });
 }
 function landOnMoon() {
   scene = 'moon'; clearFx(); tracks.length = 0; whoosh(false);
@@ -2131,7 +2133,21 @@ function climb(dt, up, down) {
   rocket.thrust += ((rocket.count > 0 ? 0 : up ? 1 : rocket.y > 0 ? .35 : 0) - rocket.thrust) * Math.min(1, dt * 5);
   return was > 0 && rocket.y === 0;
 }
+// coming home from space: a few seconds of fire, then a calm landing on the pad, always in the same time.
+// The height eases down along (1 - t)², quick at first and slowing to a soft touchdown. No keys work on the way.
+const HOME_S = 13, FIRE_S = 3;
+const homeHeight = t => (SPACE_Y - 10) * (1 - Math.min(1, t / HOME_S)) ** 2;
+const reentryFire = t => 1 - smooth(FIRE_S - 1, FIRE_S, t); // full fire, fading out over the last second
+function flyHome(dt) {
+  rocket.home += dt;
+  const was = rocket.y;
+  rocket.y = homeHeight(rocket.home);
+  rocket.vy = (rocket.y - was) / dt;
+  rocket.thrust += ((rocket.home < FIRE_S ? 0 : .35) - rocket.thrust) * Math.min(1, dt * 5); // engines off in the fire, then a gentle glow
+  if (rocket.y === 0) { Object.assign(rocket, { vy: 0, thrust: 0, auto: false }); leaveRocket(); } // the car drives out by itself
+}
 function flyRocketEarth(dt) {
+  if (rocket.auto) { flyHome(dt); return; }
   rocket.a += turnKeys() * 1.2 * dt; // turns on the spot, but never drifts away from the pad
   climb(dt, upKeys(), downKeys());
   if (rocket.y >= SPACE_Y) enterSpace();
@@ -2689,7 +2705,7 @@ function splash(x, z, n, ring = false) {
 const FLAME_AT = { car: [2.3, .7], boat: [2.9, .9], heli: [.6, -.4], buggy: [1.9, .7], monster: [2.8, 1.2], saucer: [0, -.3], bouncer: [2.1, .8],
   digger: [3.2, 1.2], truck: [3.6, 1.2], dozer: [3.2, 1.1] };
 const FLAME_COL = [[1, .45, .05], [1, .7, .1], [.95, .25, 0]];
-let boostCarry = 0; // flames still owed from the last frames
+let boostCarry = 0, fireCarry = 0; // flames still owed from the last frames: turbo, and the rocket's re-entry
 let foamGap = 0, trailGap = 0; // metres to go before the next patch of foam, and the next puff of the jet's trails
 function updateFx(dt) {
   const bv = Math.abs(boat.v);
@@ -2723,6 +2739,15 @@ function updateFx(dt) {
     const a = drnd() * 6.283, sp = 6 + drnd() * 6, base = scene === 'earth' ? MOUNTH : 0;
     dust(rocket.x + Math.cos(a) * 3, base + .5, rocket.z + Math.sin(a) * 3, Math.cos(a) * sp, Math.sin(a) * sp, liftoff.most, liftoff.size);
   }
+  if (mode === 'rocket' && scene === 'earth' && rocket.auto && rocket.home < FIRE_S) { // re-entry: flames stream up past the falling rocket
+    const k = reentryFire(rocket.home), base = MOUNTH + rocket.y;
+    for (let n = Math.floor((fireCarry += dt * (easy ? 30 : 90) * k)); n > 0; n--, fireCarry--) {
+      if (fx.filter(f => f.flame).length >= (easy ? 25 : 60)) break;
+      const a = drnd() * 6.283, r = 1.5 + drnd() * 1.5;
+      fx.push({ flame: true, fire: true, x: rocket.x + Math.cos(a) * r, y: base + drnd() * 12, z: rocket.z + Math.sin(a) * r,
+        vx: Math.cos(a) * 3, vy: 4 + drnd() * 4, vz: Math.sin(a) * 3, life: .3 + drnd() * .2, max: .5, size: 2.4, col: FLAME_COL[Math.floor(drnd() * 3)] });
+    }
+  } else fireCarry = 0;
   if (mode === 'monster' && Math.abs(monster.v) > 8 && drnd() < dt * 20) { // sand flies up behind the big wheels
     const c = Math.cos(monster.a), s = Math.sin(monster.a);
     dust(monster.x - s * 2.6, monster.y + .4, monster.z - c * 2.6, (drnd() - .5) * 2 - s * 2, (drnd() - .5) * 2 - c * 2);
@@ -3331,8 +3356,10 @@ function camGoal() {
       return { eye: [v.x - dx * back, v.y + mix(16, 75, near), v.z - fz * back], at: [v.x, v.y + 2 - 20 * near, v.z] };
     }
     // climbing, the camera pulls back and up so the town shrinks below
-    const base = scene === 'earth' ? MOUNTH : 0, t = Math.min(v.y, SPACE_Y), back = 32 + t * .15, lift = 8 + t * .28;
-    return { eye: [v.x - dx * back, v.y + base + lift, v.z - fz * back], at: [v.x, v.y + base + 9, v.z] };
+    // coming home the camera comes in closer and looks down past the rocket at the town, back to normal near the pad
+    const home = scene === 'earth' && rocket.auto ? smooth(0, 150, v.y) : 0, near = 1 - .45 * home, down = home * .15 * v.y;
+    const base = scene === 'earth' ? MOUNTH : 0, t = Math.min(v.y, SPACE_Y), back = (32 + t * .15) * near, lift = (8 + t * .28) * near;
+    return { eye: [v.x - dx * back, v.y + base + lift, v.z - fz * back], at: [v.x, v.y + base + 9 - down, v.z] };
   }
   if (mode === 'buggy') return { eye: [v.x - dx * 13, v.y + 6, v.z - fz * 13], at: [v.x + dx * 4, v.y + 1.5, v.z + fz * 4] };
   if (mode === 'monster' || mode === 'bouncer') { // a little further back, over the ground's bumps
@@ -3366,6 +3393,20 @@ function drawFlame() {
   const g = liftoff.glow; // the outer glow, smaller in easy mode
   draw3(glowBall, chain(b, mT(0, -1 - 2.5 * th, 0), mS(3.2 * g, (4 + 6 * th) * fl * g, 3.2 * g)), [1, .55, .2], .6 * th);
   draw3(glowBall, chain(b, mT(0, -.6 - 1.5 * th, 0), mS(1.8, (2.5 + 4 * th) * fl, 1.8)), [.75, .85, 1], .9 * th);
+  setFog(fog[0], fog[1]);
+}
+function drawReentry() { // the orange glow wrapped round the rocket as it plunges back into the sky, and the flames streaming past
+  if (mode !== 'rocket' || scene !== 'earth' || !rocket.auto) return;
+  setFog(1e5, 2e5); // high up the world fades away, but the fire never does
+  for (const f of fx) if (f.fire) {
+    const t = 1 - f.life / f.max, s = (.9 - t * .6) * f.size;
+    draw3(glowBall, chain(mT(f.x, f.y, f.z), mS(s, s * 1.8, s)), f.col, .8 * (1 - t));
+  }
+  if (rocket.home < FIRE_S) {
+    const k = reentryFire(rocket.home), fl = 1 + .08 * Math.sin(T * 30), b = rocketBase(), g = liftoff.glow;
+    draw3(glowBall, chain(b, mT(0, 7, 0), mS(12 * g, 30 * fl, 12 * g)), [1, .4, .08], .6 * k);
+    draw3(glowBall, chain(b, mT(0, 3, 0), mS(7, 15 * fl, 7)), [1, .75, .3], .7 * k);
+  }
   setFog(fog[0], fog[1]);
 }
 function drawBuggy() {
@@ -3539,8 +3580,8 @@ function draw() {
     draw3(ball, chain(mT(f.x, f.y, f.z), mS(s, s, s)), WHITE, .7 * (1 - t * t));
   }
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // glows add light
-  drawFlame();
-  for (const f of fx) if (f.flame) { // turbo flames: glowing puffs that shrink as they fade
+  drawFlame(); drawReentry();
+  for (const f of fx) if (f.flame && !f.fire) { // turbo flames: glowing puffs that shrink as they fade
     const t = 1 - f.life / f.max, s = .9 - t * .6;
     draw3(glowBall, chain(mT(f.x, f.y, f.z), mS(s, s, s)), f.col, .75 * (1 - t));
   }
