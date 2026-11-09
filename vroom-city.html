@@ -18,7 +18,10 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #9fd8ff; font-family: system-ui, sans-serif; }
   canvas { display: block; width: 100vw; height: 100vh; }
-  #mode { position: fixed; top: 16px; right: 24px; font-size: 44px; font-weight: 800; color: #fff; text-shadow: 0 4px 0 #0005; }
+  #boost.dim { opacity: .35; filter: grayscale(1); }
+  #badges { position: fixed; top: 16px; right: 24px; display: flex; gap: 28px; align-items: center; }
+  #mode, #boost { font-size: 44px; font-weight: 800; color: #fff; text-shadow: 0 4px 0 #0005; }
+  #boost { transition: opacity .3s, filter .3s; }
   #hud { position: fixed; top: 16px; left: 24px; font-size: 64px; font-weight: 800; color: #fff; text-shadow: 0 4px 0 #0005; }
   #help { position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; color: #fff; font-size: 18px; text-shadow: 0 2px 0 #0006; }
   #yay { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 120px; font-weight: 900; color: #ffd84a;
@@ -35,7 +38,7 @@
 <body>
 <canvas id="c"></canvas>
 <div id="hud">⭐ 0</div>
-<div id="mode">H = 🚁</div>
+<div id="badges"><div id="boost">O = 🔥</div><div id="mode">H = 🚁</div></div>
 <div id="yay">Great job!</div>
 <div id="help"></div>
 <div id="muted" title="Sound is off: press M">🔇</div>
@@ -1320,6 +1323,8 @@ function chime(step = 0) {
   [1, 1.25, 1.5, 2].forEach((m, i) => tone(f * m, .3, 'triangle', .07, i * .07, 0, 5));
   tone(f * 4, .5, 'sine', .015, .21); // a little sparkle on top
 }
+// O pressed before the turbo is ready: a soft, short fizzle
+function fizzle() { hiss(.3, .05, 1200, 300); tone(260, .22, 'sine', .025, 0, 150); }
 function boing() { tone(320, .35, 'sine', .14, 0, 90); tone(480, .25, 'triangle', .03, 0, 140); }
 // planet game sounds: blocks tumbling down, a balloon popping, a jelly mushroom throwing the car up
 function crash() {
@@ -1597,25 +1602,46 @@ function puff(x, y, z, n) {
     col: pick(RAINBOW), life: 1.6 + rnd()
   });
 }
+// ---------- Turbo boost ----------
+// O: double top speed for 3 s, then it eases back over half a second; ready again 3 s after that
+const BOOST = { mul: 2, len: 3, ease: .5, cool: 3 };
+const BOOSTS = ['car', 'boat', 'heli', 'buggy', 'monster', 'saucer', 'bouncer', 'digger', 'truck', 'dozer']; // everything you steer
+const boost = { t: Infinity }; // seconds since the last boost started
+function boostMul(t) {
+  if (t < BOOST.len) return BOOST.mul;
+  if (t < BOOST.len + BOOST.ease) return BOOST.mul - (BOOST.mul - 1) * (t - BOOST.len) / BOOST.ease;
+  return 1;
+}
+const boostReady = t => t >= BOOST.len + BOOST.ease + BOOST.cool;
+const canBoost = () => BOOSTS.includes(mode);
+const boosting = () => canBoost() && boost.t < BOOST.len + BOOST.ease;
+const bm = () => canBoost() ? boostMul(boost.t) : 1; // what the current vehicle's top speed is multiplied by
+// over the top speed (after a boost, or the boat coming ashore fast) it slows down smoothly instead of snapping back
+const topOut = (v, top, dt) => v > top ? Math.max(top, v - top * 1.5 * dt) : v;
+function pressBoost() {
+  if (!canBoost()) return;
+  if (!boostReady(boost.t)) { fizzle(); return; }
+  boost.t = 0; whoosh(true);
+}
 const HELP = {
-  car: 'Arrows or WASD = drive · Space = beep beep! · H = helicopter · M = sound · Esc = leave fullscreen',
-  boat: 'Arrows or WASD = steer the boat · Space = toot toot! · H = helicopter · M = sound',
-  heli: 'Arrows = fly · W or Space = go up · S or Shift = go down · H = car · M = sound',
-  carStation: 'Arrows or WASD = drive · Space = beep beep! · H = rocket · M = sound',
-  heliStation: 'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound',
+  car: 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = helicopter · M = sound · Esc = leave fullscreen',
+  boat: 'Arrows or WASD = steer the boat · Space = toot toot! · O = turbo! · H = helicopter · M = sound',
+  heli: 'Arrows = fly · W or Space = go up · S or Shift = go down · O = turbo! · H = car · M = sound',
+  carStation: 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = rocket · M = sound',
+  heliStation: 'Arrows = fly · W or Space = go up · S or Shift = go down · O = turbo! · H = rocket · M = sound',
   rocketPad: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · H = car · M = sound',
   rocketMoon: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · M = sound',
   rocketSpace: 'Arrows = fly · W or Space = go up · S or Shift = go down · M = sound',
-  buggy: 'Arrows or WASD = drive the buggy · H = rocket · M = sound',
-  monster: 'Arrows or WASD = drive the monster truck · H = rocket · M = sound',
-  saucer: 'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound',
-  bouncer: 'Arrows or WASD = drive the bouncy car · H = rocket · M = sound',
-  carSite: 'Arrows or WASD = drive · Space = beep beep! · H = climb in · M = sound',
-  digger: 'Arrows or WASD = drive · Space = scoop or dump · H = car · M = sound',
-  truck: 'Arrows or WASD = drive · Space = tip the load · H = car · M = sound',
-  dozer: 'Arrows or WASD = drive · Space = blade up or down · H = car · M = sound',
+  buggy: 'Arrows or WASD = drive the buggy · O = turbo! · H = rocket · M = sound',
+  monster: 'Arrows or WASD = drive the monster truck · O = turbo! · H = rocket · M = sound',
+  saucer: 'Arrows = fly · W or Space = go up · S or Shift = go down · O = turbo! · H = rocket · M = sound',
+  bouncer: 'Arrows or WASD = drive the bouncy car · O = turbo! · H = rocket · M = sound',
+  carSite: 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = climb in · M = sound',
+  digger: 'Arrows or WASD = drive · Space = scoop or dump · O = turbo! · H = car · M = sound',
+  truck: 'Arrows or WASD = drive · Space = tip the load · O = turbo! · H = car · M = sound',
+  dozer: 'Arrows or WASD = drive · Space = blade up or down · O = turbo! · H = car · M = sound',
   crane: 'Arrows = swing the arm and move the hook · Space = grab or let go · H = car · M = sound',
-  carJet: 'Arrows or WASD = drive · Space = beep beep! · H = jet · M = sound',
+  carJet: 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = jet · M = sound',
   jetRunway: 'Hold W, Space or ↑ = take off · H = car · M = sound',
   jetAir: 'Arrows = steer · W or Space = go up · S or Shift = go down · H = land · M = sound',
   jetAuto: 'Sit back and enjoy the flight! · M = sound'
@@ -1633,8 +1659,14 @@ function refreshHud() {
   const b = document.getElementById('mode'), h = document.getElementById('help');
   if (b.textContent !== badge) b.textContent = badge;
   if (h.textContent !== HELP[help]) h.textContent = HELP[help];
+  const o = document.getElementById('boost'), show = canBoost() ? '' : 'none', dim = !boostReady(boost.t);
+  if (o.style.display !== show) o.style.display = show;
+  if (o.classList.contains('dim') !== dim) o.classList.toggle('dim', dim);
 }
-function setMode(m) { mode = m; refreshHud(); }
+function setMode(m) {
+  if (boosting() && !BOOSTS.includes(m)) boost.t = BOOST.len + BOOST.ease; // no boost here: it ends, and the recharge starts
+  mode = m; refreshHud();
+}
 setMode('car');
 // car and boat swap where the water starts, with a 1.5 margin either side of the shore so they never flicker
 const SHORE = 1.5;
@@ -1643,7 +1675,7 @@ function toBoat(from) {
   setMode('boat'); splashSound(); splash(boat.x, boat.z, 30); puff(boat.x, 1, boat.z, 15);
 }
 function toCar() {
-  Object.assign(car, { x: boat.x, y: 0, z: boat.z, a: boat.a, v: Math.max(-8, Math.min(22, boat.v)), steer: boat.steer });
+  Object.assign(car, { x: boat.x, y: 0, z: boat.z, a: boat.a, v: Math.max(-8, boat.v), steer: boat.steer }); // a fast boat comes ashore fast, and the car slows down smoothly
   setMode('car'); splashSound(); splash(car.x, car.z, 20); puff(car.x, 1, car.z, 15);
 }
 // ---------- Rocket: board on the station, blast off, space, the Moon and home again ----------
@@ -1747,6 +1779,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && isMachine(mode)) machineAction(me());
   if (e.code === 'KeyH' || e.code === 'Enter') switchVehicle();
   if (e.code === 'KeyM') toggleMute();
+  if (e.code === 'KeyO') pressBoost();
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -1755,10 +1788,11 @@ const held = (...c) => c.some(k => keys.has(k));
 function driveCar(dt) {
   const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
-  if (up) car.v += (car.v < 0 ? 30 : 14) * dt;
+  const b = bm();
+  if (up) car.v += (car.v < 0 ? 30 : 14 * b) * dt;
   else if (down) car.v -= (car.v > 0 ? 30 : 10) * dt;
   else car.v *= Math.pow(.35, dt);
-  car.v = Math.max(-8, Math.min(22, car.v));
+  car.v = Math.max(-8, topOut(car.v, 22 * b, dt));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
   car.steer += (target - car.steer) * Math.min(1, dt * 8);
   car.a += car.steer * 2.0 * dt * Math.max(-1, Math.min(1, car.v / 5));
@@ -1776,13 +1810,15 @@ function driveCar(dt) {
   if (car.y === 0 && inWater(car.x, car.z, SHORE)) toBoat(car);
 }
 
+const BOAT_HOP_MAX = Math.SQRT2 * (5 + 28 * .2); // twice the height means sqrt(2) times the speed up
 function driveBoat(dt) {
   const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
-  if (up) boat.v += (boat.v < 0 ? 30 : 13) * dt;
+  const b = bm();
+  if (up) boat.v += (boat.v < 0 ? 30 : 13 * b) * dt;
   else if (down) boat.v -= (boat.v > 0 ? 22 : 10) * dt;
   else boat.v *= Math.pow(.6, dt); // glides on when you let go
-  boat.v = Math.max(-8, Math.min(28, boat.v));
+  boat.v = Math.max(-8, topOut(boat.v, 28 * b, dt));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
   boat.steer += (target - boat.steer) * Math.min(1, dt * 6);
   boat.a += boat.steer * 1.8 * dt * Math.max(-1, Math.min(1, boat.v / 5));
@@ -1800,7 +1836,8 @@ function driveBoat(dt) {
   const ramp = ramps.find(r => Math.hypot(r.x - boat.x, r.z - boat.z) < r.r);
   if (ramp && !boat.onRamp && boat.hop === 0) {
     const fast = Math.abs(boat.v) > 14;
-    boat.vy = (fast ? 5 + Math.abs(boat.v) * .2 : 1.5) * (ramp.big ? Math.sqrt(1.5) : 1);
+    // a boosted boat goes higher, but never more than twice as high as at its normal top speed
+    boat.vy = (fast ? Math.min(5 + Math.abs(boat.v) * .2, BOAT_HOP_MAX) : 1.5) * (ramp.big ? Math.sqrt(1.5) : 1);
     boat.big = ramp.big && fast;
     if (fast) { splashSound(); splash(boat.x, boat.z, 18); }
   }
@@ -1862,8 +1899,9 @@ function flyHeli(dt) {
   const fwd = held('ArrowUp'), back = held('ArrowDown');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
   const rise = held('KeyW', 'Space', 'PageUp'), sink = held('KeyS', 'ShiftLeft', 'ShiftRight', 'PageDown');
-  if (fwd) heli.v += 20 * dt; else if (back) heli.v -= 20 * dt; else heli.v *= Math.pow(.4, dt);
-  heli.v = Math.max(-10, Math.min(32, heli.v));
+  const b = bm();
+  if (fwd) heli.v += (heli.v < 0 ? 20 : 20 * b) * dt; else if (back) heli.v -= 20 * dt; else heli.v *= Math.pow(.4, dt);
+  heli.v = Math.max(-10, topOut(heli.v, 32 * b, dt));
   heli.a += ((left ? 1 : 0) - (right ? 1 : 0)) * 1.7 * dt;
   const t = here();
   heli.x = Math.max(t.x0, Math.min(t.x1, heli.x + Math.sin(heli.a) * heli.v * dt));
@@ -2098,14 +2136,17 @@ function flyRocketPlanet(dt) {
   if (rocket.y >= PLANET_TOP) leavePlanet();
 }
 // the moon buggy drives like the car, but floats: bumps throw it up and it comes down slowly
+// a boosted buggy flies higher off a ramp, but never more than twice as high as at its normal top speed
+const BUGGY_TOP = 14, BUGGY_JUMP_MAX = () => Math.SQRT2 * 1.1 * BUGGY_TOP * RAMP_H / RAMP_L;
 function driveBuggy(dt) {
   const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
   const ground = buggy.y <= buggy.g + .02;
-  if (up) buggy.v += (buggy.v < 0 ? 24 : 10) * dt;
+  const b = bm();
+  if (up) buggy.v += (buggy.v < 0 ? 24 : 10 * b) * dt;
   else if (down) buggy.v -= (buggy.v > 0 ? 24 : 8) * dt;
   else if (ground) buggy.v *= Math.pow(.4, dt);
-  buggy.v = Math.max(-6, Math.min(14, buggy.v));
+  buggy.v = Math.max(-6, topOut(buggy.v, BUGGY_TOP * b, dt));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
   buggy.steer += (target - buggy.steer) * Math.min(1, dt * 8);
   buggy.a += buggy.steer * 2.0 * dt * Math.max(-1, Math.min(1, buggy.v / 5));
@@ -2124,8 +2165,8 @@ function driveBuggy(dt) {
   } else { buggy.x = nx; buggy.z = nz; }
   const g = moonGround(buggy.x, buggy.z);
   const lift = Math.max(0, (g - buggy.g) / dt), cliff = buggy.g - g > 2 && buggy.up > 1; // cliff: just drove off the high end of a ramp
-  if (cliff) { buggy.vy = buggy.up * 1.1; buggy.y = Math.max(buggy.y, buggy.g); buggy.peak = buggy.y; } // launched by the ramp
-  else if (ground) { buggy.vy = lift > 1 ? lift * .9 : 0; buggy.y = g; }
+  if (cliff) { buggy.vy = Math.min(buggy.up * 1.1, BUGGY_JUMP_MAX()); buggy.y = Math.max(buggy.y, buggy.g); buggy.peak = buggy.y; } // launched by the ramp
+  else if (ground) { buggy.vy = lift > 1 ? Math.min(lift * .9, BUGGY_JUMP_MAX()) : 0; buggy.y = g; }
   const wasAir = !ground || cliff;
   if (!ground || buggy.vy > 0) {
     buggy.vy -= MOON_G * dt; buggy.y += buggy.vy * dt;
@@ -2153,10 +2194,11 @@ function driveBuggy(dt) {
 function steerDrive(c, dt, top, back, ground = true) {
   const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
-  if (up) c.v += (c.v < 0 ? 30 : 14) * dt;
+  const b = bm();
+  if (up) c.v += (c.v < 0 ? 30 : 14 * b) * dt;
   else if (down) c.v -= (c.v > 0 ? 30 : 10) * dt;
   else if (ground) c.v *= Math.pow(.35, dt);
-  c.v = Math.max(-back, Math.min(top, c.v));
+  c.v = Math.max(-back, topOut(c.v, top * b, dt));
   c.steer += ((left ? 1 : 0) - (right ? 1 : 0) - c.steer) * Math.min(1, dt * 8);
   c.a += c.steer * 2.0 * dt * Math.max(-1, Math.min(1, c.v / 5));
   c.spin += c.v * dt / .9;
@@ -2223,8 +2265,9 @@ function updateTowers(dt) {
 function flySaucer(dt) {
   const s = saucer, fwd = held('ArrowUp'), back = held('ArrowDown');
   const rise = held('KeyW', 'Space', 'PageUp'), sink = held('KeyS', 'ShiftLeft', 'ShiftRight', 'PageDown');
-  if (fwd) s.v += 20 * dt; else if (back) s.v -= 20 * dt; else s.v *= Math.pow(.4, dt);
-  s.v = Math.max(-10, Math.min(32, s.v));
+  const b = bm();
+  if (fwd) s.v += (s.v < 0 ? 20 : 20 * b) * dt; else if (back) s.v -= 20 * dt; else s.v *= Math.pow(.4, dt);
+  s.v = Math.max(-10, topOut(s.v, 32 * b, dt));
   s.a += turnKeys() * 1.7 * dt;
   const nx = s.x + Math.sin(s.a) * s.v * dt, nz = s.z + Math.cos(s.a) * s.v * dt;
   if (offEdge(nx, nz) || (s.y < 22 && into(s, nx, nz, rocket, 5))) bumpBack(s); else { s.x = nx; s.z = nz; }
@@ -2362,11 +2405,11 @@ function stackTop(x, z) {
 
 // one machine drives: speed up, slow down, steer (it can also turn on the spot), and stay inside the yard
 function driveMachine(m, up, down, left, right, dt, cap = 1) {
-  const S = SPEC[m.kind];
-  if (up) m.v += (m.v < 0 ? 16 : 8) * dt;
+  const S = SPEC[m.kind], b = m === me() ? bm() : 1;
+  if (up) m.v += (m.v < 0 ? 16 : 8 * b) * dt;
   else if (down) m.v -= (m.v > 0 ? 16 : 6) * dt;
   else m.v *= Math.pow(.2, dt);
-  m.v = Math.max(-4, Math.min(S.vmax * cap, m.v));
+  m.v = Math.max(-4, topOut(m.v, S.vmax * cap * b, dt));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
   m.steer += (target - m.steer) * Math.min(1, dt * 6);
   m.a += m.steer * S.turn * dt * Math.max(.6, Math.min(1, Math.abs(m.v) / 3)) * (m.v < -.5 ? -1 : 1);
@@ -2514,6 +2557,7 @@ function leaveMachine() { // the car appears next to the machine, on free ground
 }
 
 function update(dt) {
+  boost.t += dt;
   if (scene === 'space') flySpace(dt);
   else if (scene === 'moon') { if (mode === 'buggy') driveBuggy(dt); else flyRocketMoon(dt); }
   else if (scene === 'planet') updatePlanet(dt);
@@ -2593,6 +2637,11 @@ function splash(x, z, n, ring = false) {
     fx.push({ spray: true, x, y: .4, z, vx: Math.cos(a) * sp, vy: ring ? 3.5 + drnd() * 2 : 5 + drnd() * 6, vz: Math.sin(a) * sp, life: 1, max: 1 });
   }
 }
+// where the turbo flames come out: how far behind the middle, and how high (under the helicopter and the saucer)
+const FLAME_AT = { car: [2.3, .7], boat: [2.9, .9], heli: [.6, -.4], buggy: [1.9, .7], monster: [2.8, 1.2], saucer: [0, -.3], bouncer: [2.1, .8],
+  digger: [3.2, 1.2], truck: [3.6, 1.2], dozer: [3.2, 1.1] };
+const FLAME_COL = [[1, .45, .05], [1, .7, .1], [.95, .25, 0]];
+let boostCarry = 0; // flames still owed from the last frames
 let foamGap = 0, trailGap = 0; // metres to go before the next patch of foam, and the next puff of the jet's trails
 function updateFx(dt) {
   const bv = Math.abs(boat.v);
@@ -2634,9 +2683,19 @@ function updateFx(dt) {
     const c = Math.cos(buggy.a), s = Math.sin(buggy.a);
     dust(buggy.x - s * 1.8, .4, buggy.z - c * 1.8, (drnd() - .5) * 2 - s * 2, (drnd() - .5) * 2 - c * 2);
   }
+  if (boosting()) { // turbo: orange and yellow flames stream out of the back
+    const v = me(), [back, up] = FLAME_AT[mode], c = Math.cos(v.a), s = Math.sin(v.a);
+    for (let n = Math.floor((boostCarry += dt * (easy ? 30 : 70))); n > 0; n--, boostCarry--) {
+      if (fx.filter(f => f.flame).length >= (easy ? 25 : 60)) break;
+      const ox = (drnd() - .5) * .8;
+      fx.push({ flame: true, x: v.x - s * back + ox * c, y: v.y + up + (drnd() - .5) * .3, z: v.z - c * back - ox * s,
+        vx: -s * (3 + drnd() * 3) + (drnd() - .5) * 1.5, vy: .6 + drnd() * 1.2, vz: -c * (3 + drnd() * 3) + (drnd() - .5) * 1.5,
+        life: .35 + drnd() * .2, max: .55, col: FLAME_COL[Math.floor(drnd() * 3)] });
+    }
+  } else boostCarry = 0;
   for (const f of fx) {
     f.life -= dt; f.x += f.vx * dt; f.y += f.vy * dt; f.z += f.vz * dt;
-    if (f.dust) { const k = Math.pow(.3, dt); f.vx *= k; f.vz *= k; f.vy *= k; } else if (!f.foam && !f.trail) f.vy -= (f.spray ? 16 : 6) * dt;
+    if (f.dust || f.flame) { const k = Math.pow(.3, dt); f.vx *= k; f.vz *= k; f.vy *= k; } else if (!f.foam && !f.trail) f.vy -= (f.spray ? 16 : 6) * dt;
     if (f.spray && f.y < .15) f.life = 0; // back in the water
   }
   for (let i = fx.length - 1; i >= 0; i--) if (fx[i].life <= 0) fx.splice(i, 1);
@@ -3433,6 +3492,10 @@ function draw() {
   }
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // glows add light
   drawFlame();
+  for (const f of fx) if (f.flame) { // turbo flames: glowing puffs that shrink as they fade
+    const t = 1 - f.life / f.max, s = .9 - t * .6;
+    draw3(glowBall, chain(mT(f.x, f.y, f.z), mS(s, s, s)), f.col, .75 * (1 - t));
+  }
   if (earth && Math.sin(T * 3) > 0) draw3(glowBall, chain(mT(...here().airport.light), mS(2.4, 2.4, 2.4)), [1, .15, .1], .9); // the tower's blinking light
   if (earth) for (const s of here().stars) {
     const y = s.y + Math.sin(T * 3 + s.phase) * .5, g = (s.sky ? 6.5 : 4.8) * (1 + .06 * Math.sin(T * 5 + s.phase));
@@ -3450,7 +3513,7 @@ function draw() {
     const g = 22 * (1 + .06 * Math.sin(T * 5 + s.phase));
     draw3(glowBall, chain(mT(s.x, s.y + Math.sin(T * 3 + s.phase) * 1.5, s.z), mS(g, g, g)), [1, .8, .25], .45);
   }
-  for (const f of fx) if (!f.dust && !f.spray && !f.foam && !f.trail) {
+  for (const f of fx) if (!f.dust && !f.spray && !f.foam && !f.trail && !f.flame) {
     const s = .25 + .3 * Math.abs(Math.sin(f.life * 18));
     draw3(sparkMesh, chain(mT(f.x, f.y, f.z), mRY(f.life * 9), mS(s, s, s)), f.col, Math.min(1, f.life * 2));
   }

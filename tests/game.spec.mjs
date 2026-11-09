@@ -486,10 +486,10 @@ test('at the station H boards the rocket, from the car or the helicopter on the 
   });
   expect(r).toEqual({
     town: 'H = 🚁',
-    pad: ['H = 🚀', 'Arrows or WASD = drive · Space = beep beep! · H = rocket · M = sound'],
+    pad: ['H = 🚀', 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = rocket · M = sound'],
     board: ['rocket', 'earth', true, 'H = 🚗', 'Hold W, Space or ↑ = blast off · S or ↓ = go down · H = car · M = sound'],
     cancel: ['car', true],
-    heliPad: ['H = 🚀', 'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound'],
+    heliPad: ['H = 🚀', 'Arrows = fly · W or Space = go up · S or Shift = go down · O = turbo! · H = rocket · M = sound'],
     heli: ['rocket', true, 'H = 🚗'], heliBack: ['car', true], elsewhere: 'H = 🚁',
   });
 });
@@ -951,12 +951,12 @@ test('H climbs into the machine next to the car and back out; the badge and help
     setMode('heli'); Object.assign(heli, { x: digger.x, y: 20, z: digger.z }); switchVehicle(); out.heliLands = [mode, hits(car.x, car.z)];
     return out;
   });
-  const car = 'Arrows or WASD = drive · Space = beep beep! · H = climb in · M = sound';
+  const car = 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = climb in · M = sound';
   const back = ['car', false, true, true];
   expect(r).toEqual({
-    digger: ['H = 🚜', car], diggerIn: ['digger', 'H = 🚗', 'Arrows or WASD = drive · Space = scoop or dump · H = car · M = sound'], diggerOut: back,
-    truck: ['H = 🚚', car], truckIn: ['truck', 'H = 🚗', 'Arrows or WASD = drive · Space = tip the load · H = car · M = sound'], truckOut: back,
-    dozer: ['H = 🚜', car], dozerIn: ['dozer', 'H = 🚗', 'Arrows or WASD = drive · Space = blade up or down · H = car · M = sound'], dozerOut: back,
+    digger: ['H = 🚜', car], diggerIn: ['digger', 'H = 🚗', 'Arrows or WASD = drive · Space = scoop or dump · O = turbo! · H = car · M = sound'], diggerOut: back,
+    truck: ['H = 🚚', car], truckIn: ['truck', 'H = 🚗', 'Arrows or WASD = drive · Space = tip the load · O = turbo! · H = car · M = sound'], truckOut: back,
+    dozer: ['H = 🚜', car], dozerIn: ['dozer', 'H = 🚗', 'Arrows or WASD = drive · Space = blade up or down · O = turbo! · H = car · M = sound'], dozerOut: back,
     crane: ['H = 🏗️', car], craneIn: ['crane', 'H = 🚗', 'Arrows = swing the arm and move the hook · Space = grab or let go · H = car · M = sound'], craneOut: back,
     gate: 'H = 🚁', heliLands: ['car', false],
   });
@@ -1268,9 +1268,9 @@ test('planets: flying into each one lands there, its own vehicle comes out, H go
     }
     return out;
   }, STEP);
-  const help = ['Arrows or WASD = drive the monster truck · H = rocket · M = sound',
-    'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound',
-    'Arrows or WASD = drive the bouncy car · H = rocket · M = sound'];
+  const help = ['Arrows or WASD = drive the monster truck · O = turbo! · H = rocket · M = sound',
+    'Arrows = fly · W or Space = go up · S or Shift = go down · O = turbo! · H = rocket · M = sound',
+    'Arrows or WASD = drive the bouncy car · O = turbo! · H = rocket · M = sound'];
   ['monster', 'saucer', 'bouncer'].forEach((car, i) => expect(r[i]).toEqual({ where: ['planet', i, 'rocket'], landed: true,
     car: [car, 'H = 🚀', help[i]], inside: true, back: ['rocket', 'planet', true], left: true, above: true }));
 });
@@ -1678,4 +1678,165 @@ test('served from the web, the page asks for the analytics script and plays on w
   await page.keyboard.press('KeyX');
   await page.waitForFunction(() => started);
   expect(problems).toEqual([]);
+});
+
+// ---------- Turbo boost (#30) ----------
+const pressO = `() => dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyO' }))`;
+
+test('turbo: O doubles the car to 44 for 3 s with flames and a whoosh, eases back to 22, and recharges for 3 s', async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 300 });
+  const problems = await open(page);
+  await page.keyboard.press('KeyX'); // start
+  const r = await page.evaluate(pressO => {
+    const press = eval(pressO), out = {}, sounds = { whoosh: 0, fizzle: 0 };
+    const realWhoosh = whoosh, realFizzle = fizzle;
+    whoosh = up => { sounds.whoosh++; realWhoosh(up); }; fizzle = () => { sounds.fizzle++; realFizzle(); };
+    setMode('car'); Object.assign(car, { v: 0 }); const home = { x: car.x, z: car.z, a: car.a };
+    keys.clear(); keys.add('ArrowUp'); clearFx();
+    const step = secs => { let top = 0; for (let i = 0; i < Math.round(secs * 60); i++) { update(1 / 60); Object.assign(car, home); top = Math.max(top, car.v); } return top; };
+    const o = document.getElementById('boost');
+    const badge = () => [o.style.display !== 'none', o.classList.contains('dim'), o.textContent];
+    step(2); out.normal = car.v; out.readyBadge = badge(); out.help = document.getElementById('help').textContent.includes('O = turbo!');
+    press(); out.started = [boost.t, sounds.whoosh];
+    out.boostedTop = step(2.8); out.flames = fx.filter(f => f.flame).length; out.boostBadge = badge();
+    press(); out.early = [sounds.fizzle, sounds.whoosh, boost.t < 3]; // pressed during the boost: only a fizzle
+    step(.4); out.easing = car.v; // 3.2 s in: on its way down, never a snap back
+    step(1.3); out.after = car.v; out.afterFlames = fx.filter(f => f.flame).length;
+    press(); out.recharging = [sounds.fizzle, badge()[1]]; // 4.5 s in: still recharging
+    step(2.1); out.readyAgain = badge()[1]; // 6.6 s in: ready
+    press(); out.again = [sounds.whoosh, boost.t];
+    whoosh = realWhoosh; fizzle = realFizzle; keys.clear();
+    return out;
+  }, pressO);
+  expect(r.normal).toBe(22);
+  expect(r.readyBadge).toEqual([true, false, 'O = 🔥']);
+  expect(r.help).toBe(true);
+  expect(r.started).toEqual([0, 1]);
+  expect(r.boostedTop).toBeCloseTo(44, 5);
+  expect(r.flames).toBeGreaterThan(5);
+  expect(r.boostBadge).toEqual([true, true, 'O = 🔥']);
+  expect(r.early).toEqual([1, 1, true]);
+  expect(r.easing).toBeGreaterThan(22.5);
+  expect(r.easing).toBeLessThan(43);
+  expect(r.after).toBe(22);
+  expect(r.afterFlames).toBe(0);
+  expect(r.recharging).toEqual([2, true]);
+  expect(r.readyAgain).toBe(false);
+  expect(r.again).toEqual([2, 0]);
+  expect(problems).toEqual([]);
+});
+
+test('turbo: every vehicle you steer reaches twice its top speed; the crane, rocket and jet do not boost', async ({ page }) => {
+  await open(page);
+  await page.keyboard.press('KeyX'); // start, so O counts
+  const r = await page.evaluate(([SHORE_AT, pressO]) => {
+    const press = eval(pressO), out = {};
+    // holds forward and drives the vehicle on the spot, boosted or not, and returns its top speed
+    const top = (m, o, drive, key, boosted, setup = () => {}) => {
+      setup(); setMode(m); const home = { x: o.x, y: o.y, z: o.z, a: o.a }; o.v = 0;
+      keys.clear(); keys.add(key);
+      let t = 0;
+      for (let i = 0; i < 600; i++) { boost.t = boosted ? 0 : Infinity; drive(); Object.assign(o, home); t = Math.max(t, o.v); }
+      keys.clear(); return t;
+    };
+    const lakeMid = eval(SHORE_AT)(island.x, island.z, 1, .3).at(-15);
+    const atPlanet = i => () => { scene = 'planet'; planetIx = i; Object.assign({ monster, saucer, bouncer }[PLANET_CAR[i]], { x: 6, z: 6, y: planetGround(6, 6), a: 0, vy: 0 }); };
+    const list = [
+      ['car', car, () => driveCar(1 / 60), 'ArrowUp'],
+      ['boat', boat, () => driveBoat(1 / 60), 'ArrowUp', () => Object.assign(boat, lakeMid, { a: 0, hop: 0, vy: 0 })],
+      ['heli', heli, () => flyHeli(1 / 60), 'ArrowUp', () => Object.assign(heli, { x: 0, y: 30, z: 0 })],
+      ['buggy', buggy, () => driveBuggy(1 / 60), 'ArrowUp', () => { scene = 'moon'; Object.assign(buggy, { x: 10, z: 10, a: 0, vy: 0, up: 0 }); buggy.g = buggy.y = moonGround(10, 10); }],
+      ['monster', monster, () => driveMonster(1 / 60), 'ArrowUp', atPlanet(0)],
+      ['saucer', saucer, () => flySaucer(1 / 60), 'ArrowUp', atPlanet(1)],
+      ['bouncer', bouncer, () => driveBouncer(1 / 60), 'ArrowUp', atPlanet(2)],
+      ['digger', digger, () => driveByKid(digger, 1 / 60), 'ArrowUp'],
+      ['truck', truck, () => driveByKid(truck, 1 / 60), 'ArrowUp'],
+      ['dozer', dozer, () => driveByKid(dozer, 1 / 60), 'ArrowUp']
+    ];
+    for (const [m, o, drive, key, setup] of list) {
+      const normal = top(m, o, drive, key, false, setup), boosted = top(m, o, drive, key, true, setup);
+      out[m] = [normal > 5, Math.round(boosted / normal * 1000) / 1000];
+      scene = 'earth';
+    }
+    // nothing to boost: O does nothing at all, not even a fizzle
+    const sounds = { whoosh: 0, fizzle: 0 }, realWhoosh = whoosh, realFizzle = fizzle;
+    whoosh = () => sounds.whoosh++; fizzle = () => sounds.fizzle++;
+    out.none = ['crane', 'rocket', 'jet'].map(m => {
+      boost.t = Infinity; setMode(m); press();
+      return [m, boost.t, document.getElementById('boost').style.display, document.getElementById('help').textContent.includes('O = turbo!')];
+    });
+    out.noneSounds = sounds;
+    whoosh = realWhoosh; fizzle = realFizzle; setMode('car');
+    return out;
+  }, [SHORE_AT, pressO]);
+  for (const m of ['car', 'boat', 'heli', 'buggy', 'monster', 'saucer', 'bouncer', 'digger', 'truck', 'dozer']) expect(r[m], m).toEqual([true, 2]);
+  expect(r.none).toEqual([['crane', Infinity, 'none', false], ['rocket', Infinity, 'none', false], ['jet', Infinity, 'none', false]]);
+  expect(r.noneSounds).toEqual({ whoosh: 0, fizzle: 0 });
+});
+
+test('turbo: a boosted boat and buggy jump higher off ramps, but never more than twice as high', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(STEP => {
+    const step = eval(STEP), out = {};
+    const boatJump = (v, boosted) => { // the ramps test's run: aim at a big lake ramp and hold the speed
+      const ramp = ramps.find(k => !k.river && !k.big);
+      setMode('boat');
+      Object.assign(boat, { x: ramp.x - 12, z: ramp.z, a: Math.PI / 2, v, hop: 0, vy: 0, onRamp: false, big: false });
+      let top = 0;
+      for (let i = 0; i < 240; i++) {
+        boost.t = boosted ? 0 : Infinity; boat.v = v; driveBoat(1 / 60); top = Math.max(top, boat.hop);
+        boat.x = Math.min(boat.x, ramp.x + ramp.r + 1);
+      }
+      return top;
+    };
+    out.boat = [boatJump(28, false), boatJump(56, true)];
+    setMode('rocket'); landOnMoon(); step(30, () => mode === 'buggy');
+    const buggyJump = (speed, boosted) => { // the moon ramp test's run
+      const ramp = moonRamps[0], st = rampPoint(ramp, -RAMP_L / 2 - 14);
+      Object.assign(buggy, { x: st.x, z: st.z, a: ramp.a, v: speed, vy: 0, up: 0, peak: 0 });
+      buggy.g = buggy.y = moonGround(st.x, st.z); keys.clear();
+      let top = 0;
+      for (let i = 0; i < 60 * 9; i++) {
+        boost.t = boosted ? 0 : Infinity;
+        if (buggy.y < buggy.g + .05) buggy.v = speed;
+        update(1 / 60); top = Math.max(top, buggy.y);
+      }
+      return top - RAMP_H; // how far above the top of the ramp
+    };
+    out.buggy = [buggyJump(14, false), buggyJump(28, true)];
+    boost.t = Infinity;
+    return out;
+  }, STEP);
+  const [boatNormal, boatBoost] = r.boat, [buggyNormal, buggyBoost] = r.buggy;
+  expect(boatNormal).toBeGreaterThan(1.5);
+  expect(boatBoost / boatNormal).toBeGreaterThan(1.5);
+  expect(boatBoost / boatNormal).toBeLessThan(2.05);
+  expect(buggyNormal).toBeGreaterThan(1);
+  expect(buggyBoost / buggyNormal).toBeGreaterThan(1.3);
+  expect(buggyBoost / buggyNormal).toBeLessThan(2.05);
+});
+
+test('turbo: a boost carries on when the car becomes the boat, and ends when you climb into the rocket', async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 300 });
+  await open(page);
+  await page.keyboard.press('KeyX'); // start, so O counts
+  const r = await page.evaluate(([TOWN_SHORE, pressO, STEP]) => {
+    const press = eval(pressO), step = eval(STEP), s = eval(TOWN_SHORE), out = {};
+    setMode('car'); Object.assign(car, s.at(4), { a: s.toWater, v: 0 }); keys.clear(); keys.add('ArrowUp');
+    press(); out.into = step(2.5, () => mode === 'boat') < 2.5;
+    step(1.2); out.boat = [mode, boosting(), boat.v > 28]; // still boosted out on the water: past the boat's normal 28
+    // a fast boat coming ashore keeps its speed, and the car slows down smoothly
+    Object.assign(boat, { v: 50 }); toCar(); out.ashore = [mode, car.v];
+    keys.clear(); boost.t = 1; setMode('heli'); out.heli = boosting();
+    setMode('rocket'); out.rocket = [boosting(), boost.t, boostReady(boost.t)];
+    step(3.1); out.ready = boostReady(boost.t);
+    setMode('car');
+    return out;
+  }, [TOWN_SHORE, pressO, STEP]);
+  expect(r.into).toBe(true);
+  expect(r.boat).toEqual(['boat', true, true]);
+  expect(r.ashore).toEqual(['car', 50]);
+  expect(r.heli).toBe(true);
+  expect(r.rocket).toEqual([false, 3.5, false]);
+  expect(r.ready).toBe(true);
 });
