@@ -310,6 +310,7 @@ let italy = null; // the Tuscan town, built the first time the jet flies there
 const solids = [];
 function box(x, y, z, w, h, d, col, mat = 0) { mesh(BOX, x, y + h / 2, z, w, h, d, 0, col, mat); } // y = bottom
 function solid(x, z, w, d, top, car = true) { solids.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, top, car }); }
+function round(r) { solids[solids.length - 1].r = r; } // the car bumps the last solid as a circle of radius r round its middle
 const BARK = hex(0x8a5a2b);
 function tree(x, z, pine = false) {
   const s = 0.8 + rnd() * 0.6, leaf = hex(pick([0x3fae49, 0x52c75a, 0x2e9a3e])), turn = drnd() * 6;
@@ -1095,7 +1096,7 @@ function buildItaly() {
   mesh(CYL6, PX, 1.9, PZ, .8, 2.4, .8, 0, hex(0xe0d6c2));
   mesh(DISC, PX, 3.1, PZ, 2.4, .3, 2.4, 0, hex(0xe0d6c2));
   mesh(ICO1, PX, 3.6, PZ, .9, .9, .9, 0, hex(0xe0d6c2));
-  solid(PX, PZ, 6.4, 6.4, 3.4);
+  solid(PX, PZ, 6.4, 6.4, 3.4); round(3.2); // the car bumps on the round basin, not the square's corners
   const chx = PX - 13, chz = PZ + 15.5; // the church faces the fountain across the street
   box(chx, 0, chz, 13, 10, 12, hex(0xf3ead8));
   mesh(GABLE, chx, 11.2, chz, 13.6, 2.4, 12.6, 0, TERRACOTTA[0]);
@@ -1119,7 +1120,7 @@ function buildItaly() {
     mesh(DISC, x, .75, z, 1.6, .08, 1.6, 0, hex(0xfafafa));
     mesh(CYL6, x, 1.4, z, .12, 2.8, .12, 0, POLE);
     mesh(CONE8, x, 3.2, z, 4, 1, 4, 0, hex(0xd84a3a)); mesh(CONE8, x, 3.25, z, 2.4, .7, 2.4, 0, hex(0xfafafa));
-    solid(x, z, 1.4, 1.4, 3.8);
+    solid(x, z, 1.4, 1.4, 3.8); round(.8); // the car drives under the canopy and only bumps the little table round the pole
   }
 
   // water: a sandy beach round the lake, and the river on its gravel bed, with humped stone bridges where the streets cross it
@@ -1596,6 +1597,41 @@ function hits(x, z, r = 1.7, self = null) { // self: the machine asking, which i
   for (const m of machines) if (m !== self && Math.hypot(x - m.x, z - m.z) < m.r + r - .5) return true;
   return false;
 }
+// The car bumps on its own outline, a rectangle that turns with it: half its width (wheels and mirrors) and half its length (bumpers)
+const CAR_HALF = { home: [1.37, 2.43], italy: [1.18, 1.95] };
+const carHalf = () => CAR_HALF[town] || CAR_HALF.home;
+// do two rectangles overlap? each is { x, z, a, w, d }: middle, turn, half width and half length (separating axes)
+function rectsOverlap(p, q) {
+  const ax = r => [[Math.cos(r.a), -Math.sin(r.a)], [Math.sin(r.a), Math.cos(r.a)]];
+  const ap = ax(p), aq = ax(q), dx = q.x - p.x, dz = q.z - p.z;
+  const reach = (r, axes, [ux, uz]) => r.w * Math.abs(axes[0][0] * ux + axes[0][1] * uz) + r.d * Math.abs(axes[1][0] * ux + axes[1][1] * uz);
+  for (const u of [...ap, ...aq]) if (Math.abs(dx * u[0] + dz * u[1]) >= reach(p, ap, u) + reach(q, aq, u)) return false;
+  return true;
+}
+// does the rectangle overlap a circle round (cx, cz)?
+function rectCircle(p, cx, cz, r) {
+  const dx = cx - p.x, dz = cz - p.z, c = Math.cos(p.a), s = Math.sin(p.a);
+  const side = dx * c - dz * s, fwd = dx * s + dz * c;
+  return Math.hypot(side - Math.max(-p.w, Math.min(p.w, side)), fwd - Math.max(-p.d, Math.min(p.d, fwd))) < r;
+}
+// would the car at (x, z) facing a touch anything? Only touching counts, so it gets right up to things
+function carHits(x, z, a) {
+  const [w, d] = carHalf(), me = { x, z, a, w, d }, t = here();
+  const ex = w * Math.abs(Math.cos(a)) + d * Math.abs(Math.sin(a)), ez = w * Math.abs(Math.sin(a)) + d * Math.abs(Math.cos(a));
+  if (x - ex < t.x0 || x + ex > t.x1 || z - ez < t.z0 || z + ez > t.z1) return true;
+  for (const o of solids) {
+    if (!o.car) continue;
+    if (o.r) { if (rectCircle(me, (o.x0 + o.x1) / 2, (o.z0 + o.z1) / 2, o.r)) return true; continue; }
+    if (x + ex <= o.x0 || x - ex >= o.x1 || z + ez <= o.z0 || z - ez >= o.z1) continue;
+    if (rectsOverlap(me, { x: (o.x0 + o.x1) / 2, z: (o.z0 + o.z1) / 2, a: 0, w: (o.x1 - o.x0) / 2, d: (o.z1 - o.z0) / 2 })) return true;
+  }
+  if (jet.phase === 'parked' && jet.town === town && rectsOverlap(me, { x: jet.x, z: jet.z, a: jet.a, w: 6.5, d: 7.5 })) return true;
+  for (const b of blocks) if (!b.held && b.y < 1.5 && rectsOverlap(me, { x: b.x, z: b.z, a: 0, w: 1, d: 1 })) return true;
+  for (const m of machines) if (rectCircle(me, m.x, m.z, m.r - .5)) return true;
+  return false;
+}
+const GLANCE = 30 * Math.PI / 180; // brushing a wall at this angle or less slides along it
+const NUDGES = [.04, .08, .12].flatMap(r => Array.from({ length: 8 }, (_, i) => [r * Math.cos(i * Math.PI / 4), r * Math.sin(i * Math.PI / 4)])); // smallest first
 function puff(x, y, z, n) {
   for (let k = 0; k < n; k++) confetti.push({
     x, y, z, vx: (rnd() - .5) * 14, vy: 6 + rnd() * 10, vz: (rnd() - .5) * 14, floor: Math.max(.2, y - 3),
@@ -1795,16 +1831,28 @@ function driveCar(dt) {
   car.v = Math.max(-8, topOut(car.v, 22 * b, dt));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
   car.steer += (target - car.steer) * Math.min(1, dt * 8);
-  car.a += car.steer * 2.0 * dt * Math.max(-1, Math.min(1, car.v / 5));
+  const turn = car.a + car.steer * 2.0 * dt * Math.max(-1, Math.min(1, car.v / 5));
+  // already touching something (say, just got out of another vehicle): drive free until clear, as before
+  const free = carHits(car.x, car.z, car.a) ? (x, z) => !hits(x, z) : (x, z, a = car.a) => !carHits(x, z, a);
+  if (free(car.x, car.z, turn)) car.a = turn;
+  else { // the turn would swing the nose or tail into something: ease off it a few centimetres, or hold the turn back
+    const off = NUDGES.find(([ox, oz]) => free(car.x + ox, car.z + oz, turn));
+    if (off) { car.x += off[0]; car.z += off[1]; car.a = turn; }
+  }
 
   car.spin += car.v * dt / .48; // wheels roll with the car
-  const nx = car.x + Math.sin(car.a) * car.v * dt, nz = car.z + Math.cos(car.a) * car.v * dt;
-  let bumped = false;
-  if (!hits(nx, car.z)) car.x = nx; else bumped = true;
-  if (!hits(car.x, nz)) car.z = nz; else bumped = true;
-  if (bumped) {
-    if (Math.abs(car.v) > 3 && T - lastBoing > .5) { boing(); lastBoing = T; }
-    car.v *= -0.3;
+  const sx = Math.sin(car.a) * car.v * dt, sz = Math.cos(car.a) * car.v * dt;
+  if (free(car.x + sx, car.z + sz)) { car.x += sx; car.z += sz; }
+  else { // go as far as it can along x and then z, so it stops right where it touches
+    const far = ok => { if (ok(1)) return 1; let lo = 0, hi = 1; for (let i = 0; i < 8; i++) { const m = (lo + hi) / 2; if (ok(m)) lo = m; else hi = m; } return lo; };
+    const fx = far(k => free(car.x + sx * k, car.z)); car.x += sx * fx;
+    const fz = far(k => free(car.x, car.z + sz * k)); car.z += sz * fz;
+    // only the part across the wall stopped: a shallow brush glides on; a steeper hit goes boing and bounces back
+    const along = fx === 1 ? Math.abs(sx) : fz === 1 ? Math.abs(sz) : 0;
+    if (along < Math.hypot(sx, sz) * Math.cos(GLANCE) - 1e-9) {
+      if (Math.abs(car.v) > 3 && T - lastBoing > .5) { boing(); lastBoing = T; }
+      car.v *= -0.3;
+    }
   }
   car.y = bridgeY(car.x, car.z); // up over a Tuscan bridge, where the river below stays the boat's
   if (car.y === 0 && inWater(car.x, car.z, SHORE)) toBoat(car);

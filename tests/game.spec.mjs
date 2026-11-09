@@ -1840,3 +1840,100 @@ test('turbo: a boost carries on when the car becomes the boat, and ends when you
   expect(r.rocket).toEqual([false, 3.5, false]);
   expect(r.ready).toBe(true);
 });
+
+// ---------- Cars bump on their own outline (#27) ----------
+// In the page: drive the car in one town with nothing in the way but what the test puts there.
+const CLEAR = `(tn) => {
+  goTo(tn); setMode('car'); started = true;
+  const keep = solids.filter(o => o.r); solids.length = 0; machines.length = 0; blocks.length = 0; jet.town = 'nowhere';
+  const t = here(), cx = (t.x0 + t.x1) / 2, cz = (t.z0 + t.z1) / 2;
+  const [w, d] = carHalf();
+  const drive = (secs, ...k) => { keys.clear(); k.forEach(c => keys.add(c)); const vs = []; for (let i = 0; i < secs * 60; i++) { driveCar(1 / 60); vs.push(car.v); } keys.clear(); return vs; };
+  const put = (x, z, a) => Object.assign(car, { x, z, a, v: 0, steer: 0 });
+  const right = () => car.x + w * Math.abs(Math.cos(car.a)) + d * Math.abs(Math.sin(car.a)); // the car's edge furthest along +x
+  return { keep, cx, cz, w, d, drive, put, right };
+}`;
+
+test('both cars bump on their own outline: no gap head-on or beside a wall, slide on a brush, bounce on a hit', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(CLEAR => {
+    const out = { half: CAR_HALF };
+    for (const tn of ['home', 'italy']) {
+      const { cx, cz, w, d, drive, put, right } = eval(CLEAR)(tn), wx = cx + 10, o = {};
+      solid(wx + .5, cz, 1, 200, 5); // a long wall along z
+      put(cx, cz, Math.PI / 2); o.headOnBounce = Math.min(...drive(3, 'ArrowUp')) < 0; // straight at it: boing, back a bit
+      put(cx, cz, Math.PI / 2); drive(1.5, 'ArrowUp'); keys.add('ArrowUp'); for (let i = 0; i < 400 && !(car.v < 0); i++) driveCar(1 / 60); keys.clear();
+      o.headOnGap = wx - right();
+      put(wx - w - d - .5, cz - 60, 15 * Math.PI / 180); const z0 = car.z, vs = drive(4, 'ArrowUp'); // a 15 degree brush
+      o.brushSlid = car.z - z0; o.brushNeverBack = Math.min(...vs) >= 0; o.brushGap = wx - right();
+      put(wx - w - d - 1, cz, 60 * Math.PI / 180); o.steepBounce = Math.min(...drive(2, 'ArrowUp')) < 0; // a 60 degree hit
+      out[tn] = o;
+    }
+    return out;
+  }, CLEAR);
+  expect(r.half.italy[0]).toBeLessThan(r.half.home[0]); // the little Italian car is the narrower one
+  for (const tn of ['home', 'italy']) {
+    const o = r[tn];
+    expect(o.headOnBounce).toBe(true);
+    expect(o.headOnGap).toBeGreaterThanOrEqual(0); // never inside the wall
+    expect(o.headOnGap).toBeLessThan(.05); // and right up against it
+    expect(o.brushSlid).toBeGreaterThan(20);
+    expect(o.brushNeverBack).toBe(true);
+    expect(o.brushGap).toBeGreaterThanOrEqual(0);
+    expect(o.brushGap).toBeLessThan(.05);
+    expect(o.steepBounce).toBe(true);
+  }
+});
+
+test('a car pressed beside a wall cannot turn into it, but can turn away; nose-in at an angle reaches the corner', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(CLEAR => {
+    const out = {};
+    for (const tn of ['home', 'italy']) {
+      const { cx, cz, w, d, drive, put, right } = eval(CLEAR)(tn), wx = cx + 10, o = {};
+      solid(wx + .5, cz, 1, 200, 5);
+      put(wx - w - .01, cz, 0); // facing along the wall, just off it
+      let inside = false;
+      keys.add('ArrowUp'); keys.add('ArrowLeft'); // turning towards the wall
+      for (let i = 0; i < 180; i++) { driveCar(1 / 60); if (right() > wx + 1e-6) inside = true; }
+      keys.clear(); o.neverInside = !inside;
+      put(wx - w - .01, cz, 0); drive(2, 'ArrowUp', 'ArrowRight'); o.awayFrom = wx - car.x; // turning away
+      solid(cx, cz + 20.5, 200, 1, 5); // a second wall, making a corner
+      put(wx - 12, cz + 8, Math.PI / 4); drive(4, 'ArrowUp'); // nose into the corner at 45 degrees
+      const s = Math.SQRT1_2, nose = [car.x + s * d, car.z + s * d], corners = [[1, 1], [1, -1], [-1, 1]].map(([a, b]) => [car.x + s * (a * d + b * w), car.z + s * (a * d - b * w)]);
+      o.cornerGap = Math.min(...[nose, ...corners].map(([x, z]) => Math.min(wx - x, cz + 20 - z)));
+      out[tn] = o;
+    }
+    return out;
+  }, CLEAR);
+  for (const tn of ['home', 'italy']) {
+    expect(r[tn].neverInside).toBe(true);
+    expect(r[tn].awayFrom).toBeGreaterThan(5);
+    expect(r[tn].cornerGap).toBeGreaterThanOrEqual(-1e-6);
+    expect(r[tn].cornerGap).toBeLessThan(.05);
+  }
+});
+
+test('Tuscan piazza: the fountain bumps as a circle, and cars drive under the café umbrellas up to the table', async ({ page }) => {
+  await open(page);
+  const r = await page.evaluate(CLEAR => {
+    const { keep, w, d } = eval(CLEAR)('italy');
+    solids.push(...keep);
+    const fountain = keep.find(o => o.r === 3.2), umbrellas = keep.filter(o => o.r === .8);
+    const mid = o => [(o.x0 + o.x1) / 2, (o.z0 + o.z1) / 2];
+    const [fx, fz] = mid(fountain), out = { umbrellas: umbrellas.length, fountain: [], tables: [] };
+    for (let k = 0; k < 8; k++) { // round the fountain at 8 angles, the car facing it
+      const a = k * Math.PI / 4, ux = Math.sin(a), uz = Math.cos(a);
+      const at = gap => carHits(fx - ux * (3.2 + d + gap), fz - uz * (3.2 + d + gap), a);
+      out.fountain.push([at(.03), at(-.03)]);
+    }
+    for (const u of umbrellas) { // the car's side right next to the table, under the canopy
+      const [ux, uz] = mid(u), at = gap => carHits(ux - (.8 + w + gap), uz, 0);
+      out.tables.push([at(.03), at(-.03), hits(ux - (.8 + w + .03), uz)]);
+    }
+    return out;
+  }, CLEAR);
+  expect(r.umbrellas).toBe(5);
+  for (const f of r.fountain) expect(f).toEqual([false, true]);
+  for (const t of r.tables) expect(t).toEqual([false, true, true]); // free right up to the table, where the old square stopped it
+});
