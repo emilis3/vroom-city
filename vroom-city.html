@@ -18,7 +18,10 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #9fd8ff; font-family: system-ui, sans-serif; }
   canvas { display: block; width: 100vw; height: 100vh; }
-  #mode { position: fixed; top: 16px; right: 24px; font-size: 44px; font-weight: 800; color: #fff; text-shadow: 0 4px 0 #0005; }
+  #boost.dim { opacity: .35; filter: grayscale(1); }
+  #badges { position: fixed; top: 16px; right: 24px; display: flex; gap: 28px; align-items: center; }
+  #mode, #boost { font-size: 44px; font-weight: 800; color: #fff; text-shadow: 0 4px 0 #0005; }
+  #boost { transition: opacity .3s, filter .3s; }
   #hud { position: fixed; top: 16px; left: 24px; font-size: 64px; font-weight: 800; color: #fff; text-shadow: 0 4px 0 #0005; }
   #help { position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; color: #fff; font-size: 18px; text-shadow: 0 2px 0 #0006; }
   #yay { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 120px; font-weight: 900; color: #ffd84a;
@@ -35,7 +38,7 @@
 <body>
 <canvas id="c"></canvas>
 <div id="hud">⭐ 0</div>
-<div id="mode">H = 🚁</div>
+<div id="badges"><div id="boost">O = 🔥</div><div id="mode">H = 🚁</div></div>
 <div id="yay">Great job!</div>
 <div id="help"></div>
 <div id="muted" title="Sound is off: press M">🔇</div>
@@ -138,7 +141,7 @@ void main() {
   c = mix(c, vec3(0.01, 0.015, 0.05) + vec3(0.03, 0.02, 0.08) * (1.0 - abs(d.y)), uSpace);
   c += vec3(step(0.996, h) * tw * smoothstep(0.3, 1.0, uSpace));
   float s = max(dot(d, uSun), 0.0);
-  c += vec3(1.0, 0.95, 0.75) * (smoothstep(0.9990, 0.9994, s) * 0.7 + pow(s, 80.0) * 0.3);
+  c += vec3(1.0, 0.95, 0.75) * (smoothstep(0.9990, 0.9994, s) * 0.7 + pow(s, 80.0) * 0.3) * (1.0 - uSpace); // out in space a real Sun is drawn instead
   gl_FragColor = vec4(c, 1.0);
 }`;
 function shader(type, src) {
@@ -307,6 +310,7 @@ let italy = null; // the Tuscan town, built the first time the jet flies there
 const solids = [];
 function box(x, y, z, w, h, d, col, mat = 0) { mesh(BOX, x, y + h / 2, z, w, h, d, 0, col, mat); } // y = bottom
 function solid(x, z, w, d, top, car = true) { solids.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, top, car }); }
+function round(r) { solids[solids.length - 1].r = r; } // the car bumps the last solid as a circle of radius r round its middle
 const BARK = hex(0x8a5a2b);
 function tree(x, z, pine = false) {
   const s = 0.8 + rnd() * 0.6, leaf = hex(pick([0x3fae49, 0x52c75a, 0x2e9a3e])), turn = drnd() * 6;
@@ -1092,7 +1096,7 @@ function buildItaly() {
   mesh(CYL6, PX, 1.9, PZ, .8, 2.4, .8, 0, hex(0xe0d6c2));
   mesh(DISC, PX, 3.1, PZ, 2.4, .3, 2.4, 0, hex(0xe0d6c2));
   mesh(ICO1, PX, 3.6, PZ, .9, .9, .9, 0, hex(0xe0d6c2));
-  solid(PX, PZ, 6.4, 6.4, 3.4);
+  solid(PX, PZ, 6.4, 6.4, 3.4); round(3.2); // the car bumps on the round basin, not the square's corners
   const chx = PX - 13, chz = PZ + 15.5; // the church faces the fountain across the street
   box(chx, 0, chz, 13, 10, 12, hex(0xf3ead8));
   mesh(GABLE, chx, 11.2, chz, 13.6, 2.4, 12.6, 0, TERRACOTTA[0]);
@@ -1116,7 +1120,7 @@ function buildItaly() {
     mesh(DISC, x, .75, z, 1.6, .08, 1.6, 0, hex(0xfafafa));
     mesh(CYL6, x, 1.4, z, .12, 2.8, .12, 0, POLE);
     mesh(CONE8, x, 3.2, z, 4, 1, 4, 0, hex(0xd84a3a)); mesh(CONE8, x, 3.25, z, 2.4, .7, 2.4, 0, hex(0xfafafa));
-    solid(x, z, 1.4, 1.4, 3.8);
+    solid(x, z, 1.4, 1.4, 3.8); round(.8); // the car drives under the canopy and only bumps the little table round the pole
   }
 
   // water: a sandy beach round the lake, and the river on its gravel bed, with humped stone bridges where the streets cross it
@@ -1320,6 +1324,8 @@ function chime(step = 0) {
   [1, 1.25, 1.5, 2].forEach((m, i) => tone(f * m, .3, 'triangle', .07, i * .07, 0, 5));
   tone(f * 4, .5, 'sine', .015, .21); // a little sparkle on top
 }
+// O pressed before the turbo is ready: a soft, short fizzle
+function fizzle() { hiss(.3, .05, 1200, 300); tone(260, .22, 'sine', .025, 0, 150); }
 function boing() { tone(320, .35, 'sine', .14, 0, 90); tone(480, .25, 'triangle', .03, 0, 140); }
 // planet game sounds: blocks tumbling down, a balloon popping, a jelly mushroom throwing the car up
 function crash() {
@@ -1363,7 +1369,7 @@ const heli = { x: 0, y: 0, z: 0, a: 0, v: 0, rotor: 0, lift: 0 };
 const boat = { x: 0, y: .2, z: 0, a: 0, v: 0, steer: 0, hop: 0, vy: 0, onRamp: false, big: false }; // hop = height above the water, big = off a big ramp
 // count = countdown seconds left, thrust = how hard the engines push (0 to 1), auto = landing by itself
 // lift = the time T the rocket last left the ground, or null
-const rocket = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, pitch: 0, count: 0, thrust: 0, auto: false, lift: null };
+const rocket = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, pitch: 0, count: 0, thrust: 0, auto: false, lift: null, home: 0 };
 const buggy = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, steer: 0, spin: 0, g: 0, up: 0, peak: 0 }; // up = how fast a ramp is lifting it, peak = highest point of this jump
 // phase: parked, ground (on the runway), climb, air, land (by itself: leg turn, final, roll, taxi), trip or arrive; town: where it is
 const jet = { x: 0, y: 0, z: 0, a: 0, v: 0, vy: 0, bank: 0, pitch: 0, phase: 'parked', town: 'home', leg: '', wp: 0, t: 0 };
@@ -1411,6 +1417,40 @@ const planets = [
 const STATION_R = ER + 90;
 function stationPos(t = T) { const a = t * .06; return { x: Math.cos(a) * STATION_R, y: Math.sin(a) * 60, z: Math.sin(a) * STATION_R, a }; }
 const bodies = () => [{ ...stationPos(), r: 14 }]; // the planets are landed on, not bumped off
+
+// ---------- The sky seen from the Moon or a planet: the Earth, the Moon, the planets and the Sun ----------
+// Each one keeps the compass bearing it really has in space, but sits in the sky (never below the ground),
+// a bit bigger than true if it's far, and beyond the ringed planet's ring (out to 1400) so it is never inside it.
+const SKY_D = 2200, SUN_SKY_D = 2300, SKY_MIN = .14, SKY_MAX = .42, SKY_SMALL = .061, SKY_BIG = .122, SUN_ANG = .09, SUN_ELEV = .18; // angles in radians
+// The Sun keeps the light's compass bearing but sits low enough in the sky (about 10 degrees up) to be seen past the rocket.
+const sunBearing = () => Math.atan2(SUN[0], SUN[2]);
+function skyBodies(where) { // where: 'moon' or a planet's index
+  const from = where === 'moon' ? MOON : planets[where];
+  const all = [{ kind: 'earth', x: 0, y: 0, z: 0, r: ER, spin: .02 }, { kind: 'moon', ...MOON, spin: .01 },
+    ...planets.map((p, i) => ({ kind: 'planet', i, ...p, spin: .04 * (i + 1) }))];
+  const dir = (b, e) => [Math.sin(b) * Math.cos(e), Math.sin(e), Math.cos(b) * Math.cos(e)];
+  const sun = { kind: 'sun', d: SUN_SKY_D, ang: SUN_ANG, bearing: sunBearing(), elev: SUN_ELEV };
+  const out = [];
+  for (const b of all) {
+    if (b === all[1] ? where === 'moon' : b.kind === 'planet' && b.i === where) continue; // not the one you stand on
+    const dx = b.x - from.x, dy = b.y - from.y, dz = b.z - from.z, dist = Math.hypot(dx, dy, dz);
+    const real = Math.asin(b.r / dist), elev = Math.asin(dy / dist);
+    const s = { ...b, d: SKY_D, bearing: Math.atan2(dx, dz), realElev: elev, ang: Math.min(SKY_BIG, Math.max(SKY_SMALL, real)),
+      elev: Math.min(SKY_MAX, Math.max(SKY_MIN, elev)) };
+    // two in nearly the same spot: lift this one until it's clear of the others and the Sun
+    const clash = () => [sun, ...out].some(o => {
+      const a = dir(o.bearing, o.elev), c = dir(s.bearing, s.elev);
+      return Math.acos(Math.min(1, a[0] * c[0] + a[1] * c[1] + a[2] * c[2])) < (o.ang + s.ang) * 1.25;
+    });
+    for (let k = 0; k < 60 && clash(); k++) { if (s.elev + .03 <= SKY_MAX) s.elev += .03; else { s.elev = Math.min(SKY_MAX, Math.max(SKY_MIN, s.realElev)); s.bearing += .05; } } // up first, then a step sideways
+    out.push(s);
+  }
+  for (const s of [...out, sun]) {
+    const [x, y, z] = dir(s.bearing, s.elev);
+    Object.assign(s, { x: x * s.d, y: y * s.d, z: z * s.d, r: Math.tan(s.ang) * s.d });
+  }
+  return [...out, sun];
+}
 const spaceStars = [];
 function spaceStar() { // only the rocket can catch these: anywhere in space, clear of the planets and the Moon
   for (;;) {
@@ -1591,31 +1631,88 @@ function hits(x, z, r = 1.7, self = null) { // self: the machine asking, which i
   for (const m of machines) if (m !== self && Math.hypot(x - m.x, z - m.z) < m.r + r - .5) return true;
   return false;
 }
+// The car bumps on its own outline, a rectangle that turns with it: half its width (wheels and mirrors) and half its length (bumpers)
+const CAR_HALF = { home: [1.37, 2.43], italy: [1.18, 1.95] };
+const carHalf = () => CAR_HALF[town] || CAR_HALF.home;
+// do two rectangles overlap? each is { x, z, a, w, d }: middle, turn, half width and half length (separating axes)
+function rectsOverlap(p, q) {
+  const ax = r => [[Math.cos(r.a), -Math.sin(r.a)], [Math.sin(r.a), Math.cos(r.a)]];
+  const ap = ax(p), aq = ax(q), dx = q.x - p.x, dz = q.z - p.z;
+  const reach = (r, axes, [ux, uz]) => r.w * Math.abs(axes[0][0] * ux + axes[0][1] * uz) + r.d * Math.abs(axes[1][0] * ux + axes[1][1] * uz);
+  for (const u of [...ap, ...aq]) if (Math.abs(dx * u[0] + dz * u[1]) >= reach(p, ap, u) + reach(q, aq, u)) return false;
+  return true;
+}
+// does the rectangle overlap a circle round (cx, cz)?
+function rectCircle(p, cx, cz, r) {
+  const dx = cx - p.x, dz = cz - p.z, c = Math.cos(p.a), s = Math.sin(p.a);
+  const side = dx * c - dz * s, fwd = dx * s + dz * c;
+  return Math.hypot(side - Math.max(-p.w, Math.min(p.w, side)), fwd - Math.max(-p.d, Math.min(p.d, fwd))) < r;
+}
+// would the car at (x, z) facing a touch anything? Only touching counts, so it gets right up to things
+function carHits(x, z, a) {
+  const [w, d] = carHalf(), me = { x, z, a, w, d }, t = here();
+  const ex = w * Math.abs(Math.cos(a)) + d * Math.abs(Math.sin(a)), ez = w * Math.abs(Math.sin(a)) + d * Math.abs(Math.cos(a));
+  if (x - ex < t.x0 || x + ex > t.x1 || z - ez < t.z0 || z + ez > t.z1) return true;
+  for (const o of solids) {
+    if (!o.car) continue;
+    if (o.r) { if (rectCircle(me, (o.x0 + o.x1) / 2, (o.z0 + o.z1) / 2, o.r)) return true; continue; }
+    if (x + ex <= o.x0 || x - ex >= o.x1 || z + ez <= o.z0 || z - ez >= o.z1) continue;
+    if (rectsOverlap(me, { x: (o.x0 + o.x1) / 2, z: (o.z0 + o.z1) / 2, a: 0, w: (o.x1 - o.x0) / 2, d: (o.z1 - o.z0) / 2 })) return true;
+  }
+  if (jet.phase === 'parked' && jet.town === town && rectsOverlap(me, { x: jet.x, z: jet.z, a: jet.a, w: 6.5, d: 7.5 })) return true;
+  for (const b of blocks) if (!b.held && b.y < 1.5 && rectsOverlap(me, { x: b.x, z: b.z, a: 0, w: 1, d: 1 })) return true;
+  for (const m of machines) if (rectCircle(me, m.x, m.z, m.r - .5)) return true;
+  return false;
+}
+const GLANCE = 30 * Math.PI / 180; // brushing a wall at this angle or less slides along it
+const NUDGES = [.04, .08, .12].flatMap(r => Array.from({ length: 8 }, (_, i) => [r * Math.cos(i * Math.PI / 4), r * Math.sin(i * Math.PI / 4)])); // smallest first
 function puff(x, y, z, n) {
   for (let k = 0; k < n; k++) confetti.push({
     x, y, z, vx: (rnd() - .5) * 14, vy: 6 + rnd() * 10, vz: (rnd() - .5) * 14, floor: Math.max(.2, y - 3),
     col: pick(RAINBOW), life: 1.6 + rnd()
   });
 }
+// ---------- Turbo boost ----------
+// O: double top speed for 3 s, then it eases back over half a second; ready again 3 s after that
+const BOOST = { mul: 2, len: 3, ease: .5, cool: 3 };
+const BOOSTS = ['car', 'boat', 'heli', 'buggy', 'monster', 'saucer', 'bouncer', 'digger', 'truck', 'dozer']; // everything you steer
+const boost = { t: Infinity }; // seconds since the last boost started
+function boostMul(t) {
+  if (t < BOOST.len) return BOOST.mul;
+  if (t < BOOST.len + BOOST.ease) return BOOST.mul - (BOOST.mul - 1) * (t - BOOST.len) / BOOST.ease;
+  return 1;
+}
+const boostReady = t => t >= BOOST.len + BOOST.ease + BOOST.cool;
+const canBoost = () => BOOSTS.includes(mode);
+const boosting = () => canBoost() && boost.t < BOOST.len + BOOST.ease;
+const bm = () => canBoost() ? boostMul(boost.t) : 1; // what the current vehicle's top speed is multiplied by
+// over the top speed (after a boost, or the boat coming ashore fast) it slows down smoothly instead of snapping back
+const topOut = (v, top, dt) => v > top ? Math.max(top, v - top * 1.5 * dt) : v;
+function pressBoost() {
+  if (!canBoost()) return;
+  if (!boostReady(boost.t)) { fizzle(); return; }
+  boost.t = 0; whoosh(true);
+}
 const HELP = {
-  car: 'Arrows or WASD = drive · Space = beep beep! · H = helicopter · M = sound · Esc = leave fullscreen',
-  boat: 'Arrows or WASD = steer the boat · Space = toot toot! · H = helicopter · M = sound',
-  heli: 'Arrows = fly · W or Space = go up · S or Shift = go down · H = car · M = sound',
-  carStation: 'Arrows or WASD = drive · Space = beep beep! · H = rocket · M = sound',
-  heliStation: 'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound',
+  car: 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = helicopter · M = sound · Esc = leave fullscreen',
+  boat: 'Arrows or WASD = steer the boat · Space = toot toot! · O = turbo! · H = helicopter · M = sound',
+  heli: 'Arrows = fly · W or Space = go up · S or Shift = go down · O = turbo! · H = car · M = sound',
+  carStation: 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = rocket · M = sound',
+  heliStation: 'Arrows = fly · W or Space = go up · S or Shift = go down · O = turbo! · H = rocket · M = sound',
   rocketPad: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · H = car · M = sound',
+  rocketHome: 'Sit back and enjoy the ride home! · M = sound',
   rocketMoon: 'Hold W, Space or ↑ = blast off · S or ↓ = go down · M = sound',
   rocketSpace: 'Arrows = fly · W or Space = go up · S or Shift = go down · M = sound',
-  buggy: 'Arrows or WASD = drive the buggy · H = rocket · M = sound',
-  monster: 'Arrows or WASD = drive the monster truck · H = rocket · M = sound',
-  saucer: 'Arrows = fly · W or Space = go up · S or Shift = go down · H = rocket · M = sound',
-  bouncer: 'Arrows or WASD = drive the bouncy car · H = rocket · M = sound',
-  carSite: 'Arrows or WASD = drive · Space = beep beep! · H = climb in · M = sound',
-  digger: 'Arrows or WASD = drive · Space = scoop or dump · H = car · M = sound',
-  truck: 'Arrows or WASD = drive · Space = tip the load · H = car · M = sound',
-  dozer: 'Arrows or WASD = drive · Space = blade up or down · H = car · M = sound',
+  buggy: 'Arrows or WASD = drive the buggy · O = turbo! · H = rocket · M = sound',
+  monster: 'Arrows or WASD = drive the monster truck · O = turbo! · H = rocket · M = sound',
+  saucer: 'Arrows = fly · W or Space = go up · S or Shift = go down · O = turbo! · H = rocket · M = sound',
+  bouncer: 'Arrows or WASD = drive the bouncy car · O = turbo! · H = rocket · M = sound',
+  carSite: 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = climb in · M = sound',
+  digger: 'Arrows or WASD = drive · Space = scoop or dump · O = turbo! · H = car · M = sound',
+  truck: 'Arrows or WASD = drive · Space = tip the load · O = turbo! · H = car · M = sound',
+  dozer: 'Arrows or WASD = drive · Space = blade up or down · O = turbo! · H = car · M = sound',
   crane: 'Arrows = swing the arm and move the hook · Space = grab or let go · H = car · M = sound',
-  carJet: 'Arrows or WASD = drive · Space = beep beep! · H = jet · M = sound',
+  carJet: 'Arrows or WASD = drive · Space = beep beep! · O = turbo! · H = jet · M = sound',
   jetRunway: 'Hold W, Space or ↑ = take off · H = car · M = sound',
   jetAir: 'Arrows = steer · W or Space = go up · S or Shift = go down · H = land · M = sound',
   jetAuto: 'Sit back and enjoy the flight! · M = sound'
@@ -1629,12 +1726,18 @@ function refreshHud() {
     rocket: landed() ? 'H = 🚗' : '🚀', digger: 'H = 🚗', truck: 'H = 🚗', dozer: 'H = 🚗', crane: 'H = 🚗' }[mode];
   const help = nm ? 'carSite' : atStation ? mode + 'Station' : nj ? 'carJet' :
     mode === 'jet' ? (jet.phase === 'ground' ? 'jetRunway' : (jet.phase === 'air' || jet.phase === 'arrive') ? 'jetAir' : 'jetAuto') : mode !== 'rocket' ? mode :
-    scene === 'space' ? 'rocketSpace' : scene === 'moon' || scene === 'planet' ? 'rocketMoon' : 'rocketPad';
+    scene === 'space' ? 'rocketSpace' : scene === 'moon' || scene === 'planet' ? 'rocketMoon' : rocket.auto ? 'rocketHome' : 'rocketPad';
   const b = document.getElementById('mode'), h = document.getElementById('help');
   if (b.textContent !== badge) b.textContent = badge;
   if (h.textContent !== HELP[help]) h.textContent = HELP[help];
+  const o = document.getElementById('boost'), show = canBoost() ? '' : 'none', dim = !boostReady(boost.t);
+  if (o.style.display !== show) o.style.display = show;
+  if (o.classList.contains('dim') !== dim) o.classList.toggle('dim', dim);
 }
-function setMode(m) { mode = m; refreshHud(); }
+function setMode(m) {
+  if (boosting() && !BOOSTS.includes(m)) boost.t = BOOST.len + BOOST.ease; // no boost here: it ends, and the recharge starts
+  mode = m; refreshHud();
+}
 setMode('car');
 // car and boat swap where the water starts, with a 1.5 margin either side of the shore so they never flicker
 const SHORE = 1.5;
@@ -1643,7 +1746,7 @@ function toBoat(from) {
   setMode('boat'); splashSound(); splash(boat.x, boat.z, 30); puff(boat.x, 1, boat.z, 15);
 }
 function toCar() {
-  Object.assign(car, { x: boat.x, y: 0, z: boat.z, a: boat.a, v: Math.max(-8, Math.min(22, boat.v)), steer: boat.steer });
+  Object.assign(car, { x: boat.x, y: 0, z: boat.z, a: boat.a, v: Math.max(-8, boat.v), steer: boat.steer }); // a fast boat comes ashore fast, and the car slows down smoothly
   setMode('car'); splashSound(); splash(car.x, car.z, 20); puff(car.x, 1, car.z, 15);
 }
 // ---------- Rocket: board on the station, blast off, space, the Moon and home again ----------
@@ -1662,9 +1765,10 @@ function enterSpace() {
   scene = 'space'; clearFx();
   Object.assign(rocket, { x: 0, y: ER + GAP, z: 0, v: 0, vy: 0, pitch: 0 });
 }
-function reenter() { // from anywhere in space, back into the sky above the launch pad
+function reenter() { // from anywhere in space, back into the sky above the launch pad, and down onto it by itself
   scene = 'earth'; clearFx(); whoosh(false);
-  Object.assign(rocket, { x: station.x, y: SPACE_Y - 10, z: station.z, v: 0, vy: 0, pitch: 0 });
+  Object.assign(rocket, { x: station.x, y: SPACE_Y - 10, z: station.z, a: station.a + Math.PI, // facing town, as at launch: the tower never hides the view
+    v: 0, vy: 0, pitch: 0, thrust: 0, auto: true, home: 0 });
 }
 function landOnMoon() {
   scene = 'moon'; clearFx(); tracks.length = 0; whoosh(false);
@@ -1747,6 +1851,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && isMachine(mode)) machineAction(me());
   if (e.code === 'KeyH' || e.code === 'Enter') switchVehicle();
   if (e.code === 'KeyM') toggleMute();
+  if (e.code === 'KeyO') pressBoost();
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -1755,34 +1860,49 @@ const held = (...c) => c.some(k => keys.has(k));
 function driveCar(dt) {
   const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
-  if (up) car.v += (car.v < 0 ? 30 : 14) * dt;
+  const b = bm();
+  if (up) car.v += (car.v < 0 ? 30 : 14 * b) * dt;
   else if (down) car.v -= (car.v > 0 ? 30 : 10) * dt;
   else car.v *= Math.pow(.35, dt);
-  car.v = Math.max(-8, Math.min(22, car.v));
+  car.v = Math.max(-8, topOut(car.v, 22 * b, dt));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
   car.steer += (target - car.steer) * Math.min(1, dt * 8);
-  car.a += car.steer * 2.0 * dt * Math.max(-1, Math.min(1, car.v / 5));
+  const turn = car.a + car.steer * 2.0 * dt * Math.max(-1, Math.min(1, car.v / 5));
+  // already touching something (say, just got out of another vehicle): drive free until clear, as before
+  const free = carHits(car.x, car.z, car.a) ? (x, z) => !hits(x, z) : (x, z, a = car.a) => !carHits(x, z, a);
+  if (free(car.x, car.z, turn)) car.a = turn;
+  else { // the turn would swing the nose or tail into something: ease off it a few centimetres, or hold the turn back
+    const off = NUDGES.find(([ox, oz]) => free(car.x + ox, car.z + oz, turn));
+    if (off) { car.x += off[0]; car.z += off[1]; car.a = turn; }
+  }
 
   car.spin += car.v * dt / .48; // wheels roll with the car
-  const nx = car.x + Math.sin(car.a) * car.v * dt, nz = car.z + Math.cos(car.a) * car.v * dt;
-  let bumped = false;
-  if (!hits(nx, car.z)) car.x = nx; else bumped = true;
-  if (!hits(car.x, nz)) car.z = nz; else bumped = true;
-  if (bumped) {
-    if (Math.abs(car.v) > 3 && T - lastBoing > .5) { boing(); lastBoing = T; }
-    car.v *= -0.3;
+  const sx = Math.sin(car.a) * car.v * dt, sz = Math.cos(car.a) * car.v * dt;
+  if (free(car.x + sx, car.z + sz)) { car.x += sx; car.z += sz; }
+  else { // go as far as it can along x and then z, so it stops right where it touches
+    const far = ok => { if (ok(1)) return 1; let lo = 0, hi = 1; for (let i = 0; i < 8; i++) { const m = (lo + hi) / 2; if (ok(m)) lo = m; else hi = m; } return lo; };
+    const fx = far(k => free(car.x + sx * k, car.z)); car.x += sx * fx;
+    const fz = far(k => free(car.x, car.z + sz * k)); car.z += sz * fz;
+    // only the part across the wall stopped: a shallow brush glides on; a steeper hit goes boing and bounces back
+    const along = fx === 1 ? Math.abs(sx) : fz === 1 ? Math.abs(sz) : 0;
+    if (along < Math.hypot(sx, sz) * Math.cos(GLANCE) - 1e-9) {
+      if (Math.abs(car.v) > 3 && T - lastBoing > .5) { boing(); lastBoing = T; }
+      car.v *= -0.3;
+    }
   }
   car.y = bridgeY(car.x, car.z); // up over a Tuscan bridge, where the river below stays the boat's
   if (car.y === 0 && inWater(car.x, car.z, SHORE)) toBoat(car);
 }
 
+const BOAT_HOP_MAX = Math.SQRT2 * (5 + 28 * .2); // twice the height means sqrt(2) times the speed up
 function driveBoat(dt) {
   const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
-  if (up) boat.v += (boat.v < 0 ? 30 : 13) * dt;
+  const b = bm();
+  if (up) boat.v += (boat.v < 0 ? 30 : 13 * b) * dt;
   else if (down) boat.v -= (boat.v > 0 ? 22 : 10) * dt;
   else boat.v *= Math.pow(.6, dt); // glides on when you let go
-  boat.v = Math.max(-8, Math.min(28, boat.v));
+  boat.v = Math.max(-8, topOut(boat.v, 28 * b, dt));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
   boat.steer += (target - boat.steer) * Math.min(1, dt * 6);
   boat.a += boat.steer * 1.8 * dt * Math.max(-1, Math.min(1, boat.v / 5));
@@ -1800,7 +1920,8 @@ function driveBoat(dt) {
   const ramp = ramps.find(r => Math.hypot(r.x - boat.x, r.z - boat.z) < r.r);
   if (ramp && !boat.onRamp && boat.hop === 0) {
     const fast = Math.abs(boat.v) > 14;
-    boat.vy = (fast ? 5 + Math.abs(boat.v) * .2 : 1.5) * (ramp.big ? Math.sqrt(1.5) : 1);
+    // a boosted boat goes higher, but never more than twice as high as at its normal top speed
+    boat.vy = (fast ? Math.min(5 + Math.abs(boat.v) * .2, BOAT_HOP_MAX) : 1.5) * (ramp.big ? Math.sqrt(1.5) : 1);
     boat.big = ramp.big && fast;
     if (fast) { splashSound(); splash(boat.x, boat.z, 18); }
   }
@@ -1862,8 +1983,9 @@ function flyHeli(dt) {
   const fwd = held('ArrowUp'), back = held('ArrowDown');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
   const rise = held('KeyW', 'Space', 'PageUp'), sink = held('KeyS', 'ShiftLeft', 'ShiftRight', 'PageDown');
-  if (fwd) heli.v += 20 * dt; else if (back) heli.v -= 20 * dt; else heli.v *= Math.pow(.4, dt);
-  heli.v = Math.max(-10, Math.min(32, heli.v));
+  const b = bm();
+  if (fwd) heli.v += (heli.v < 0 ? 20 : 20 * b) * dt; else if (back) heli.v -= 20 * dt; else heli.v *= Math.pow(.4, dt);
+  heli.v = Math.max(-10, topOut(heli.v, 32 * b, dt));
   heli.a += ((left ? 1 : 0) - (right ? 1 : 0)) * 1.7 * dt;
   const t = here();
   heli.x = Math.max(t.x0, Math.min(t.x1, heli.x + Math.sin(heli.a) * heli.v * dt));
@@ -2045,7 +2167,21 @@ function climb(dt, up, down) {
   rocket.thrust += ((rocket.count > 0 ? 0 : up ? 1 : rocket.y > 0 ? .35 : 0) - rocket.thrust) * Math.min(1, dt * 5);
   return was > 0 && rocket.y === 0;
 }
+// coming home from space: a few seconds of fire, then a calm landing on the pad, always in the same time.
+// The height eases down along (1 - t)², quick at first and slowing to a soft touchdown. No keys work on the way.
+const HOME_S = 13, FIRE_S = 3;
+const homeHeight = t => (SPACE_Y - 10) * (1 - Math.min(1, t / HOME_S)) ** 2;
+const reentryFire = t => 1 - smooth(FIRE_S - 1, FIRE_S, t); // full fire, fading out over the last second
+function flyHome(dt) {
+  rocket.home += dt;
+  const was = rocket.y;
+  rocket.y = homeHeight(rocket.home);
+  rocket.vy = (rocket.y - was) / dt;
+  rocket.thrust += ((rocket.home < FIRE_S ? 0 : .35) - rocket.thrust) * Math.min(1, dt * 5); // engines off in the fire, then a gentle glow
+  if (rocket.y === 0) { Object.assign(rocket, { vy: 0, thrust: 0, auto: false }); leaveRocket(); } // the car drives out by itself
+}
 function flyRocketEarth(dt) {
+  if (rocket.auto) { flyHome(dt); return; }
   rocket.a += turnKeys() * 1.2 * dt; // turns on the spot, but never drifts away from the pad
   climb(dt, upKeys(), downKeys());
   if (rocket.y >= SPACE_Y) enterSpace();
@@ -2098,14 +2234,17 @@ function flyRocketPlanet(dt) {
   if (rocket.y >= PLANET_TOP) leavePlanet();
 }
 // the moon buggy drives like the car, but floats: bumps throw it up and it comes down slowly
+// a boosted buggy flies higher off a ramp, but never more than twice as high as at its normal top speed
+const BUGGY_TOP = 14, BUGGY_JUMP_MAX = () => Math.SQRT2 * 1.1 * BUGGY_TOP * RAMP_H / RAMP_L;
 function driveBuggy(dt) {
   const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
   const ground = buggy.y <= buggy.g + .02;
-  if (up) buggy.v += (buggy.v < 0 ? 24 : 10) * dt;
+  const b = bm();
+  if (up) buggy.v += (buggy.v < 0 ? 24 : 10 * b) * dt;
   else if (down) buggy.v -= (buggy.v > 0 ? 24 : 8) * dt;
   else if (ground) buggy.v *= Math.pow(.4, dt);
-  buggy.v = Math.max(-6, Math.min(14, buggy.v));
+  buggy.v = Math.max(-6, topOut(buggy.v, BUGGY_TOP * b, dt));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
   buggy.steer += (target - buggy.steer) * Math.min(1, dt * 8);
   buggy.a += buggy.steer * 2.0 * dt * Math.max(-1, Math.min(1, buggy.v / 5));
@@ -2124,8 +2263,8 @@ function driveBuggy(dt) {
   } else { buggy.x = nx; buggy.z = nz; }
   const g = moonGround(buggy.x, buggy.z);
   const lift = Math.max(0, (g - buggy.g) / dt), cliff = buggy.g - g > 2 && buggy.up > 1; // cliff: just drove off the high end of a ramp
-  if (cliff) { buggy.vy = buggy.up * 1.1; buggy.y = Math.max(buggy.y, buggy.g); buggy.peak = buggy.y; } // launched by the ramp
-  else if (ground) { buggy.vy = lift > 1 ? lift * .9 : 0; buggy.y = g; }
+  if (cliff) { buggy.vy = Math.min(buggy.up * 1.1, BUGGY_JUMP_MAX()); buggy.y = Math.max(buggy.y, buggy.g); buggy.peak = buggy.y; } // launched by the ramp
+  else if (ground) { buggy.vy = lift > 1 ? Math.min(lift * .9, BUGGY_JUMP_MAX()) : 0; buggy.y = g; }
   const wasAir = !ground || cliff;
   if (!ground || buggy.vy > 0) {
     buggy.vy -= MOON_G * dt; buggy.y += buggy.vy * dt;
@@ -2153,10 +2292,11 @@ function driveBuggy(dt) {
 function steerDrive(c, dt, top, back, ground = true) {
   const up = held('ArrowUp', 'KeyW'), down = held('ArrowDown', 'KeyS');
   const left = held('ArrowLeft', 'KeyA'), right = held('ArrowRight', 'KeyD');
-  if (up) c.v += (c.v < 0 ? 30 : 14) * dt;
+  const b = bm();
+  if (up) c.v += (c.v < 0 ? 30 : 14 * b) * dt;
   else if (down) c.v -= (c.v > 0 ? 30 : 10) * dt;
   else if (ground) c.v *= Math.pow(.35, dt);
-  c.v = Math.max(-back, Math.min(top, c.v));
+  c.v = Math.max(-back, topOut(c.v, top * b, dt));
   c.steer += ((left ? 1 : 0) - (right ? 1 : 0) - c.steer) * Math.min(1, dt * 8);
   c.a += c.steer * 2.0 * dt * Math.max(-1, Math.min(1, c.v / 5));
   c.spin += c.v * dt / .9;
@@ -2223,8 +2363,9 @@ function updateTowers(dt) {
 function flySaucer(dt) {
   const s = saucer, fwd = held('ArrowUp'), back = held('ArrowDown');
   const rise = held('KeyW', 'Space', 'PageUp'), sink = held('KeyS', 'ShiftLeft', 'ShiftRight', 'PageDown');
-  if (fwd) s.v += 20 * dt; else if (back) s.v -= 20 * dt; else s.v *= Math.pow(.4, dt);
-  s.v = Math.max(-10, Math.min(32, s.v));
+  const b = bm();
+  if (fwd) s.v += (s.v < 0 ? 20 : 20 * b) * dt; else if (back) s.v -= 20 * dt; else s.v *= Math.pow(.4, dt);
+  s.v = Math.max(-10, topOut(s.v, 32 * b, dt));
   s.a += turnKeys() * 1.7 * dt;
   const nx = s.x + Math.sin(s.a) * s.v * dt, nz = s.z + Math.cos(s.a) * s.v * dt;
   if (offEdge(nx, nz) || (s.y < 22 && into(s, nx, nz, rocket, 5))) bumpBack(s); else { s.x = nx; s.z = nz; }
@@ -2362,11 +2503,11 @@ function stackTop(x, z) {
 
 // one machine drives: speed up, slow down, steer (it can also turn on the spot), and stay inside the yard
 function driveMachine(m, up, down, left, right, dt, cap = 1) {
-  const S = SPEC[m.kind];
-  if (up) m.v += (m.v < 0 ? 16 : 8) * dt;
+  const S = SPEC[m.kind], b = m === me() ? bm() : 1;
+  if (up) m.v += (m.v < 0 ? 16 : 8 * b) * dt;
   else if (down) m.v -= (m.v > 0 ? 16 : 6) * dt;
   else m.v *= Math.pow(.2, dt);
-  m.v = Math.max(-4, Math.min(S.vmax * cap, m.v));
+  m.v = Math.max(-4, topOut(m.v, S.vmax * cap * b, dt));
   const target = (left ? 1 : 0) - (right ? 1 : 0);
   m.steer += (target - m.steer) * Math.min(1, dt * 6);
   m.a += m.steer * S.turn * dt * Math.max(.6, Math.min(1, Math.abs(m.v) / 3)) * (m.v < -.5 ? -1 : 1);
@@ -2514,6 +2655,7 @@ function leaveMachine() { // the car appears next to the machine, on free ground
 }
 
 function update(dt) {
+  boost.t += dt;
   if (scene === 'space') flySpace(dt);
   else if (scene === 'moon') { if (mode === 'buggy') driveBuggy(dt); else flyRocketMoon(dt); }
   else if (scene === 'planet') updatePlanet(dt);
@@ -2593,6 +2735,11 @@ function splash(x, z, n, ring = false) {
     fx.push({ spray: true, x, y: .4, z, vx: Math.cos(a) * sp, vy: ring ? 3.5 + drnd() * 2 : 5 + drnd() * 6, vz: Math.sin(a) * sp, life: 1, max: 1 });
   }
 }
+// where the turbo flames come out: how far behind the middle, and how high (under the helicopter and the saucer)
+const FLAME_AT = { car: [2.3, .7], boat: [2.9, .9], heli: [.6, -.4], buggy: [1.9, .7], monster: [2.8, 1.2], saucer: [0, -.3], bouncer: [2.1, .8],
+  digger: [3.2, 1.2], truck: [3.6, 1.2], dozer: [3.2, 1.1] };
+const FLAME_COL = [[1, .45, .05], [1, .7, .1], [.95, .25, 0]];
+let boostCarry = 0, fireCarry = 0; // flames still owed from the last frames: turbo, and the rocket's re-entry
 let foamGap = 0, trailGap = 0; // metres to go before the next patch of foam, and the next puff of the jet's trails
 function updateFx(dt) {
   const bv = Math.abs(boat.v);
@@ -2626,6 +2773,15 @@ function updateFx(dt) {
     const a = drnd() * 6.283, sp = 6 + drnd() * 6, base = scene === 'earth' ? MOUNTH : 0;
     dust(rocket.x + Math.cos(a) * 3, base + .5, rocket.z + Math.sin(a) * 3, Math.cos(a) * sp, Math.sin(a) * sp, liftoff.most, liftoff.size);
   }
+  if (mode === 'rocket' && scene === 'earth' && rocket.auto && rocket.home < FIRE_S) { // re-entry: flames stream up past the falling rocket
+    const k = reentryFire(rocket.home), base = MOUNTH + rocket.y;
+    for (let n = Math.floor((fireCarry += dt * (easy ? 30 : 90) * k)); n > 0; n--, fireCarry--) {
+      if (fx.filter(f => f.flame).length >= (easy ? 25 : 60)) break;
+      const a = drnd() * 6.283, r = 1.5 + drnd() * 1.5;
+      fx.push({ flame: true, fire: true, x: rocket.x + Math.cos(a) * r, y: base + drnd() * 12, z: rocket.z + Math.sin(a) * r,
+        vx: Math.cos(a) * 3, vy: 4 + drnd() * 4, vz: Math.sin(a) * 3, life: .3 + drnd() * .2, max: .5, size: 2.4, col: FLAME_COL[Math.floor(drnd() * 3)] });
+    }
+  } else fireCarry = 0;
   if (mode === 'monster' && Math.abs(monster.v) > 8 && drnd() < dt * 20) { // sand flies up behind the big wheels
     const c = Math.cos(monster.a), s = Math.sin(monster.a);
     dust(monster.x - s * 2.6, monster.y + .4, monster.z - c * 2.6, (drnd() - .5) * 2 - s * 2, (drnd() - .5) * 2 - c * 2);
@@ -2634,9 +2790,19 @@ function updateFx(dt) {
     const c = Math.cos(buggy.a), s = Math.sin(buggy.a);
     dust(buggy.x - s * 1.8, .4, buggy.z - c * 1.8, (drnd() - .5) * 2 - s * 2, (drnd() - .5) * 2 - c * 2);
   }
+  if (boosting()) { // turbo: orange and yellow flames stream out of the back
+    const v = me(), [back, up] = FLAME_AT[mode], c = Math.cos(v.a), s = Math.sin(v.a);
+    for (let n = Math.floor((boostCarry += dt * (easy ? 30 : 70))); n > 0; n--, boostCarry--) {
+      if (fx.filter(f => f.flame).length >= (easy ? 25 : 60)) break;
+      const ox = (drnd() - .5) * .8;
+      fx.push({ flame: true, x: v.x - s * back + ox * c, y: v.y + up + (drnd() - .5) * .3, z: v.z - c * back - ox * s,
+        vx: -s * (3 + drnd() * 3) + (drnd() - .5) * 1.5, vy: .6 + drnd() * 1.2, vz: -c * (3 + drnd() * 3) + (drnd() - .5) * 1.5,
+        life: .35 + drnd() * .2, max: .55, col: FLAME_COL[Math.floor(drnd() * 3)] });
+    }
+  } else boostCarry = 0;
   for (const f of fx) {
     f.life -= dt; f.x += f.vx * dt; f.y += f.vy * dt; f.z += f.vz * dt;
-    if (f.dust) { const k = Math.pow(.3, dt); f.vx *= k; f.vz *= k; f.vy *= k; } else if (!f.foam && !f.trail) f.vy -= (f.spray ? 16 : 6) * dt;
+    if (f.dust || f.flame) { const k = Math.pow(.3, dt); f.vx *= k; f.vz *= k; f.vy *= k; } else if (!f.foam && !f.trail) f.vy -= (f.spray ? 16 : 6) * dt;
     if (f.spray && f.y < .15) f.life = 0; // back in the water
   }
   for (let i = fx.length - 1; i >= 0; i--) if (fx[i].life <= 0) fx.splice(i, 1);
@@ -3224,8 +3390,10 @@ function camGoal() {
       return { eye: [v.x - dx * back, v.y + mix(16, 75, near), v.z - fz * back], at: [v.x, v.y + 2 - 20 * near, v.z] };
     }
     // climbing, the camera pulls back and up so the town shrinks below
-    const base = scene === 'earth' ? MOUNTH : 0, t = Math.min(v.y, SPACE_Y), back = 32 + t * .15, lift = 8 + t * .28;
-    return { eye: [v.x - dx * back, v.y + base + lift, v.z - fz * back], at: [v.x, v.y + base + 9, v.z] };
+    // coming home the camera comes in closer and looks down past the rocket at the town, back to normal near the pad
+    const home = scene === 'earth' && rocket.auto ? smooth(0, 150, v.y) : 0, near = 1 - .45 * home, down = home * .15 * v.y;
+    const base = scene === 'earth' ? MOUNTH : 0, t = Math.min(v.y, SPACE_Y), back = (32 + t * .15) * near, lift = (8 + t * .28) * near;
+    return { eye: [v.x - dx * back, v.y + base + lift, v.z - fz * back], at: [v.x, v.y + base + 9 - down, v.z] };
   }
   if (mode === 'buggy') return { eye: [v.x - dx * 13, v.y + 6, v.z - fz * 13], at: [v.x + dx * 4, v.y + 1.5, v.z + fz * 4] };
   if (mode === 'monster' || mode === 'bouncer') { // a little further back, over the ground's bumps
@@ -3261,6 +3429,20 @@ function drawFlame() {
   draw3(glowBall, chain(b, mT(0, -.6 - 1.5 * th, 0), mS(1.8, (2.5 + 4 * th) * fl, 1.8)), [.75, .85, 1], .9 * th);
   setFog(fog[0], fog[1]);
 }
+function drawReentry() { // the orange glow wrapped round the rocket as it plunges back into the sky, and the flames streaming past
+  if (mode !== 'rocket' || scene !== 'earth' || !rocket.auto) return;
+  setFog(1e5, 2e5); // high up the world fades away, but the fire never does
+  for (const f of fx) if (f.fire) {
+    const t = 1 - f.life / f.max, s = (.9 - t * .6) * f.size;
+    draw3(glowBall, chain(mT(f.x, f.y, f.z), mS(s, s * 1.8, s)), f.col, .8 * (1 - t));
+  }
+  if (rocket.home < FIRE_S) {
+    const k = reentryFire(rocket.home), fl = 1 + .08 * Math.sin(T * 30), b = rocketBase(), g = liftoff.glow;
+    draw3(glowBall, chain(b, mT(0, 7, 0), mS(12 * g, 30 * fl, 12 * g)), [1, .4, .08], .6 * k);
+    draw3(glowBall, chain(b, mT(0, 3, 0), mS(7, 15 * fl, 7)), [1, .75, .3], .7 * k);
+  }
+  setFog(fog[0], fog[1]);
+}
 function drawBuggy() {
   const base = at(buggy);
   draw3(buggyBody, base);
@@ -3268,7 +3450,35 @@ function drawBuggy() {
     draw3(carWheel, chain(base, mT(sx * 1.2, .55, sz * 1.25), mRY(sz > 0 ? buggy.steer * .4 : 0), mRX(buggy.spin), mS(1.15, 1.15, 1.15)));
 }
 const globeAt = (x, y, z, r, spin) => chain(mT(x, y, z), mRY(spin), mS(2 * r, 2 * r, 2 * r));
+// the Sun: far away in the light's direction, so it always looks the same however far you fly
+const SUN_D = 5000, SUN_R = 400, SUN_COL = [1, .78, .3];
+const sunMesh = build(o => o(ICO2, 0, 0, 0, 1, 1, 1, hex(0xffd54f), 3));
+const sunAt = (d, r) => { const b = sunBearing(), c = Math.cos(SUN_ELEV) * d; return { x: cam.x + Math.sin(b) * c, y: cam.y + Math.sin(SUN_ELEV) * d, z: cam.z + Math.cos(b) * c, r }; };
+const skyCache = {};
+const skyOf = where => skyCache[where] ||= skyBodies(where);
+function drawSky(where) { // the sky hangs round the camera, like faraway things do
+  for (const s of skyOf(where)) {
+    const x = cam.x + s.x, y = cam.y + s.y, z = cam.z + s.z;
+    if (s.kind === 'sun') draw3(sunMesh, globeAt(x, y, z, s.r, 0));
+    else if (s.kind === 'earth') draw3(earthMesh, globeAt(x, y, z, s.r, T * s.spin));
+    else if (s.kind === 'moon') draw3(moonMesh, globeAt(x, y, z, s.r, T * s.spin));
+    else {
+      draw3(planetMeshes[s.i], globeAt(x, y, z, s.r, T * s.spin));
+      if (s.ring) draw3(ringMesh, chain(mT(x, y, z), mRX(.35), mS(s.r * 2.2, s.r * 2.2, s.r * 2.2)));
+    }
+  }
+}
+function drawSunGlow() { // a soft glow round the Sun, in space and in the Moon's and planets' skies
+  const s = scene === 'space' ? sunAt(SUN_D, SUN_R) : scene === 'moon' || scene === 'planet' ? (() => {
+    const k = skyOf(scene === 'moon' ? 'moon' : planetIx).find(b => b.kind === 'sun');
+    return { x: cam.x + k.x, y: cam.y + k.y, z: cam.z + k.z, r: k.r };
+  })() : null;
+  if (!s) return;
+  draw3(glowBall, chain(mT(s.x, s.y, s.z), mS(s.r * 3.4, s.r * 3.4, s.r * 3.4)), SUN_COL, .45);
+}
 function drawSpaceThings() {
+  const sun = sunAt(SUN_D, SUN_R);
+  draw3(sunMesh, globeAt(sun.x, sun.y, sun.z, sun.r, 0));
   draw3(earthMesh, globeAt(0, 0, 0, ER, T * .02));
   draw3(moonMesh, globeAt(MOON.x, MOON.y, MOON.z, MOON.r, T * .01));
   planets.forEach((pl, i) => {
@@ -3283,7 +3493,7 @@ function drawSpaceThings() {
 }
 function drawMoonThings() {
   draw3(moonWorld, ID);
-  draw3(earthMesh, globeAt(-320, 260, -760, 80, T * .02)); // the Earth hangs in the black sky
+  drawSky('moon');
   for (const s of moonStars) if (!s.wait) {
     const y = s.y + Math.sin(T * 3 + s.phase) * .5, sz = s.ramp < 0 ? 2.6 : 3.6;
     draw3(starMesh, chain(mT(s.x, y, s.z), mRY(T * 2 + s.phase), mS(sz, sz, sz)));
@@ -3296,7 +3506,7 @@ function drawMoonThings() {
 function drawPlanetThings() {
   const i = planetIx, G = PLANET_GROUND[i];
   draw3(planetWorlds[i], ID);
-  draw3(earthMesh, globeAt(-320, 260, -760, 80, T * .02)); // the Earth hangs in the black sky
+  drawSky(i);
   if (i === 1) draw3(ringMesh, chain(mT(0, -150, 0), mRX(.45), mS(1400, 1400, 1400))); // the planet's own ring arcs overhead
   if (i === 0) for (const t of towers) {
     if (t.state === 'up') {
@@ -3403,8 +3613,11 @@ function draw() {
     setFog(fog[0], fog[1]);
   }
   if (scene === 'space') draw3(earthClouds, globeAt(0, 0, 0, ER * 1.03, T * .035), WHITE, .7);
+  if (scene === 'moon' || scene === 'planet') { // the Earth in the sky has its clouds too
+    const e = skyOf(scene === 'moon' ? 'moon' : planetIx).find(b => b.kind === 'earth');
+    draw3(earthClouds, globeAt(cam.x + e.x, cam.y + e.y, cam.z + e.z, e.r * 1.03, T * .035), WHITE, .85);
+  }
   if (scene === 'moon') {
-    draw3(earthClouds, globeAt(-320, 260, -760, 80 * 1.03, T * .035), WHITE, .85);
     tracks.forEach((t, i) => { // the oldest marks fade away
       const c = Math.cos(t.a), sn = Math.sin(t.a), al = .6 * Math.min(1, (i + 1) / 60);
       for (const sx of [-1.2, 1.2]) draw3(cube, chain(mT(t.x + sx * c, .06, t.z - sx * sn), mRY(t.a), mS(.6, .02, 1)), hex(0x4a4a4a), al);
@@ -3432,7 +3645,12 @@ function draw() {
     draw3(ball, chain(mT(f.x, f.y, f.z), mS(s, s, s)), WHITE, .7 * (1 - t * t));
   }
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // glows add light
-  drawFlame();
+  drawSunGlow();
+  drawFlame(); drawReentry();
+  for (const f of fx) if (f.flame && !f.fire) { // turbo flames: glowing puffs that shrink as they fade
+    const t = 1 - f.life / f.max, s = .9 - t * .6;
+    draw3(glowBall, chain(mT(f.x, f.y, f.z), mS(s, s, s)), f.col, .75 * (1 - t));
+  }
   if (earth && Math.sin(T * 3) > 0) draw3(glowBall, chain(mT(...here().airport.light), mS(2.4, 2.4, 2.4)), [1, .15, .1], .9); // the tower's blinking light
   if (earth) for (const s of here().stars) {
     const y = s.y + Math.sin(T * 3 + s.phase) * .5, g = (s.sky ? 6.5 : 4.8) * (1 + .06 * Math.sin(T * 5 + s.phase));
@@ -3450,7 +3668,7 @@ function draw() {
     const g = 22 * (1 + .06 * Math.sin(T * 5 + s.phase));
     draw3(glowBall, chain(mT(s.x, s.y + Math.sin(T * 3 + s.phase) * 1.5, s.z), mS(g, g, g)), [1, .8, .25], .45);
   }
-  for (const f of fx) if (!f.dust && !f.spray && !f.foam && !f.trail) {
+  for (const f of fx) if (!f.dust && !f.spray && !f.foam && !f.trail && !f.flame) {
     const s = .25 + .3 * Math.abs(Math.sin(f.life * 18));
     draw3(sparkMesh, chain(mT(f.x, f.y, f.z), mRY(f.life * 9), mS(s, s, s)), f.col, Math.min(1, f.life * 2));
   }
